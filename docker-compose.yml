@@ -44,6 +44,9 @@ services:
       ASR_BASE_URL: ${ASR_BASE_URL:-}
       ASR_API_KEY: ${ASR_API_KEY:-}
       ASR_MODEL: ${ASR_MODEL:-whisper-1}
+      WEB_RENDER_ENABLED: ${WEB_RENDER_ENABLED:-true}
+      WEB_RENDER_TIMEOUT_SECONDS: ${WEB_RENDER_TIMEOUT_SECONDS:-15}
+      WEB_RENDER_WAIT_MS: ${WEB_RENDER_WAIT_MS:-1200}
     depends_on:
       postgres:
         condition: service_healthy

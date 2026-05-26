@@ -20,6 +20,13 @@ try:
 except Exception:  # pragma: no cover - optional dependency in local dev environments.
     ReadabilityDocument = None
 
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.async_api import async_playwright
+except Exception:  # pragma: no cover - optional dependency in local dev environments.
+    PlaywrightTimeoutError = None
+    async_playwright = None
+
 
 FETCH_HEADERS = {
     "User-Agent": (
@@ -32,6 +39,7 @@ FETCH_HEADERS = {
 
 MIN_MEANINGFUL_TEXT_LENGTH = 200
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+STATIC_EXTRACTION_MIN_LENGTH = 120
 
 CONTENT_SELECTORS: list[tuple[str, float]] = [
     ("#content", 60),
@@ -107,6 +115,24 @@ class ContentCandidate:
     text_length: int
 
 
+@dataclass
+class RenderedPage:
+    html: str
+    title: str | None
+    final_url: str
+
+
+@dataclass
+class PageSnapshot:
+    title: str
+    description: str | None
+    headings: list[str]
+    text_blocks: list[str]
+    controls: list[str]
+    links: list[tuple[str, str]]
+    images: list[tuple[str, str]]
+
+
 async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
     html, final_url = await fetch_html(url)
     soup = BeautifulSoup(html, "html.parser")
@@ -115,6 +141,22 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
     created_at = extract_created_at(soup)
 
     candidate = select_content_candidate(html, soup, final_url)
+    rendered_page: RenderedPage | None = None
+
+    if should_render_fallback(candidate):
+        rendered_page = await render_page(final_url)
+        if rendered_page:
+            rendered_soup = BeautifulSoup(rendered_page.html, "html.parser")
+            rendered_candidate = select_content_candidate(rendered_page.html, rendered_soup, rendered_page.final_url)
+            if rendered_candidate.score > candidate.score or rendered_candidate.text_length > candidate.text_length:
+                html = rendered_page.html
+                soup = rendered_soup
+                final_url = rendered_page.final_url
+                candidate = rendered_candidate
+                title = extract_title(soup, final_url, rendered_page.title)
+                author = extract_author(soup) or author
+                created_at = extract_created_at(soup) or created_at
+
     content = candidate.node
     normalize_links(content, final_url)
     resources = await download_images(content, final_url, assets_dir)
@@ -134,6 +176,12 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         body = extracted or body
 
     body = clean_markdown(body, title)
+    extractor_name = candidate.name
+    if not meaningful_body(body) or should_use_snapshot_body(candidate, body, rendered_page is not None):
+        snapshot = build_page_snapshot(soup, final_url, title)
+        body = render_page_snapshot_markdown(snapshot)
+        extractor_name = "rendered-snapshot" if rendered_page else "static-snapshot"
+
     return ConversionResult(
         title=title.strip(),
         source_type="webpage",
@@ -143,7 +191,7 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         author=author,
         created_at=created_at,
         resources=resources,
-        metadata={"extractor": candidate.name, "extractor_score": round(candidate.score, 2)},
+        metadata={"extractor": extractor_name, "extractor_score": round(candidate.score, 2)},
     )
 
 
@@ -185,13 +233,10 @@ def metadata_value(soup: BeautifulSoup, key: str) -> str | None:
     return content.strip() if isinstance(content, str) else None
 
 
-def extract_title(soup: BeautifulSoup, url: str) -> str:
-    title = (
-        metadata_value(soup, "og:title")
-        or metadata_value(soup, "twitter:title")
-        or page_title(soup)
-        or urlparse(url).netloc
-    )
+def extract_title(soup: BeautifulSoup, url: str, rendered_title: str | None = None) -> str:
+    page_title_value = rendered_title or page_title(soup)
+    social_title = metadata_value(soup, "og:title") or metadata_value(soup, "twitter:title")
+    title = best_title(page_title_value, social_title) or urlparse(url).netloc
     return clean_title(title)
 
 
@@ -235,6 +280,101 @@ def clean_title(title: str) -> str:
     title = normalize_text(title)
     title = re.sub(r"\s+[-|·]\s+.*$", "", title)
     return title.strip() or "Untitled"
+
+
+def best_title(page_title_value: str | None, social_title: str | None) -> str | None:
+    page_title_value = normalize_text(page_title_value or "")
+    social_title = normalize_text(social_title or "")
+    if not social_title:
+        return page_title_value or None
+    if not page_title_value:
+        return social_title
+    if re.search(r"(搜索|search|home|homepage|首页)", page_title_value, re.I):
+        return page_title_value
+    if len(social_title) > len(page_title_value) + 20 and re.search(r"[。.!?]", social_title):
+        return page_title_value
+    return social_title
+
+
+def should_render_fallback(candidate: ContentCandidate) -> bool:
+    if not settings.web_render_enabled or async_playwright is None:
+        return False
+    if candidate.text_length < STATIC_EXTRACTION_MIN_LENGTH:
+        return True
+    if candidate.name == "body-fallback" and candidate.score <= 0:
+        return True
+    return False
+
+
+def should_use_snapshot_body(candidate: ContentCandidate, body: str, was_rendered: bool) -> bool:
+    if candidate.name in {"body-fallback"}:
+        return True
+    if not was_rendered:
+        return False
+    if candidate.score < 80 and len(body) < 3000:
+        return True
+    if candidate.name in {"trafilatura", "readability"} and len(re.findall(r"(?m)^#{1,6}\s+", body)) == 0:
+        return True
+    return False
+
+
+async def render_page(url: str) -> RenderedPage | None:
+    if async_playwright is None:
+        return None
+    assert_public_url(url)
+    timeout_ms = int(settings.web_render_timeout_seconds * 1000)
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                ],
+            )
+            context = await browser.new_context(
+                user_agent=FETCH_HEADERS["User-Agent"],
+                locale="zh-CN",
+                viewport={"width": 1366, "height": 900},
+                ignore_https_errors=False,
+            )
+            page = await context.new_page()
+
+            async def guard_request(route):
+                request_url = route.request.url
+                resource_type = route.request.resource_type
+                if resource_type in {"media", "font"}:
+                    await route.abort()
+                    return
+                try:
+                    assert_public_url(request_url)
+                except Exception:
+                    await route.abort()
+                    return
+                await route.continue_()
+
+            await page.route("**/*", guard_request)
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            if response and response.status >= 400:
+                await context.close()
+                await browser.close()
+                return None
+            try:
+                await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 5000))
+            except Exception:
+                pass
+            await page.wait_for_timeout(settings.web_render_wait_ms)
+            final_url = page.url
+            assert_public_url(final_url)
+            title = await page.title()
+            html = await page.content()
+            await context.close()
+            await browser.close()
+            return RenderedPage(html=html, title=title, final_url=final_url)
+    except Exception:
+        return None
 
 
 def select_content_candidate(html: str, soup: BeautifulSoup, base_url: str | None = None) -> ContentCandidate:
@@ -436,6 +576,196 @@ def normalize_links(node, base_url: str) -> None:
             anchor.unwrap()
             continue
         anchor["href"] = urljoin(base_url, href)
+
+
+def build_page_snapshot(soup: BeautifulSoup, base_url: str, title: str) -> PageSnapshot:
+    visible_root = deepcopy(soup.body or soup)
+    clean_snapshot_node(visible_root)
+    normalize_links(visible_root, base_url)
+    description = metadata_value(soup, "description") or metadata_value(soup, "og:description")
+    headings = unique_preserve_order(
+        normalize_text(tag.get_text(" ", strip=True))
+        for tag in visible_root.find_all(re.compile(r"^h[1-6]$"))
+        if normalize_text(tag.get_text(" ", strip=True))
+    )[:30]
+    controls = extract_controls(visible_root)
+    text_blocks = extract_text_blocks(visible_root)
+    links = extract_snapshot_links(visible_root)
+    images = extract_snapshot_images(visible_root, base_url)
+    return PageSnapshot(
+        title=title,
+        description=description,
+        headings=headings,
+        text_blocks=text_blocks,
+        controls=controls,
+        links=links,
+        images=images,
+    )
+
+
+def clean_snapshot_node(node) -> None:
+    for comment in node.find_all(string=lambda value: isinstance(value, Comment)):
+        comment.extract()
+    for tag in list(
+        node.select(
+            "script, style, noscript, template, svg, iframe, object, embed, canvas, "
+            "[hidden], [aria-hidden='true'], [style*='display:none'], [style*='display: none'], "
+            "[style*='visibility:hidden'], [style*='visibility: hidden']"
+        )
+    ):
+        if tag.parent is not None:
+            tag.decompose()
+
+
+def extract_controls(node) -> list[str]:
+    controls: list[str] = []
+    for tag in node.find_all(["input", "textarea", "select", "button"]):
+        if is_invisible_control(tag):
+            continue
+        label = control_label(tag)
+        if not label:
+            continue
+        control_type = tag.name
+        if tag.name == "input":
+            control_type = f"input:{tag.get('type', 'text')}"
+        controls.append(f"{control_type} - {label}")
+    return unique_preserve_order(controls)[:40]
+
+
+def is_invisible_control(tag) -> bool:
+    input_type = normalize_text(tag.get("type", "")).lower()
+    if input_type == "hidden":
+        return True
+    if input_type in {"submit", "reset", "button", "image"} and not control_label(tag):
+        return True
+    return bool(tag.find_parent(attrs={"aria-hidden": "true"}))
+
+
+def control_label(tag) -> str:
+    values = [
+        tag.get("aria-label"),
+        tag.get("placeholder"),
+        tag.get("title"),
+        tag.get("alt"),
+        tag.get("value") if tag.name == "button" else None,
+        tag.get("value") if tag.name == "input" and tag.get("type") in {"submit", "button", "reset"} else None,
+        tag.get_text(" ", strip=True),
+    ]
+    for value in values:
+        if isinstance(value, str) and normalize_text(value):
+            return normalize_text(value)
+    if tag.name == "input" and tag.get("type") in {"search", "text", "url", "email", "tel", "number", "password"}:
+        field_name = normalize_text(tag.get("name") or tag.get("id") or "")
+        if field_name.lower() in {"q", "query", "search", "keyword", "keywords"}:
+            return "搜索关键词"
+        return field_name
+    return ""
+
+
+def extract_text_blocks(node) -> list[str]:
+    blocks: list[str] = []
+    for tag in node.find_all(["h1", "h2", "h3", "p", "li", "figcaption", "blockquote", "label"]):
+        text = normalize_text(tag.get_text(" ", strip=True))
+        if not useful_snapshot_text(text):
+            continue
+        blocks.append(text)
+    if len(blocks) < 5:
+        for text in visible_text(node).split("  "):
+            if useful_snapshot_text(text):
+                blocks.append(normalize_text(text))
+    return unique_preserve_order(blocks)[: settings.web_snapshot_max_text_blocks]
+
+
+def useful_snapshot_text(text: str) -> bool:
+    if len(text) < 2:
+        return False
+    if len(text) > 500:
+        return False
+    if re.fullmatch(r"[\W_]+", text, flags=re.UNICODE):
+        return False
+    blocked = {"javascript", "cookie", "cookies"}
+    return text.lower() not in blocked
+
+
+def extract_snapshot_links(node) -> list[tuple[str, str]]:
+    links: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for anchor in node.find_all("a"):
+        href = anchor.get("href")
+        if not isinstance(href, str) or not href.strip():
+            continue
+        text = normalize_text(anchor.get_text(" ", strip=True) or anchor.get("aria-label") or anchor.get("title") or "")
+        if not text:
+            continue
+        parsed = urlparse(href)
+        if parsed.scheme not in {"http", "https", "mailto", "tel"} and not href.startswith("#"):
+            continue
+        item = (text[:120], compact_url(href))
+        if item in seen:
+            continue
+        seen.add(item)
+        links.append(item)
+        if len(links) >= settings.web_snapshot_max_links:
+            break
+    return links
+
+
+def extract_snapshot_images(node, base_url: str) -> list[tuple[str, str]]:
+    images: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for img in node.find_all("img"):
+        image_url = extract_image_source(img, base_url)
+        if not image_url or image_url in seen or is_placeholder_image(img, image_url):
+            continue
+        label = normalize_text(img.get("alt") or img.get("title") or Path(urlparse(image_url).path).name or "image")
+        seen.add(image_url)
+        images.append((label[:120], image_url))
+        if len(images) >= settings.web_snapshot_max_images:
+            break
+    return images
+
+
+def render_page_snapshot_markdown(snapshot: PageSnapshot) -> str:
+    sections: list[str] = []
+    if snapshot.description:
+        sections.append(f"## 页面描述\n\n{snapshot.description.strip()}")
+    if snapshot.headings:
+        sections.append("## 页面标题结构\n\n" + "\n".join(f"- {heading}" for heading in snapshot.headings))
+    if snapshot.controls:
+        sections.append("## 可交互控件\n\n" + "\n".join(f"- {control}" for control in snapshot.controls))
+    if snapshot.text_blocks:
+        sections.append("## 可见文本\n\n" + "\n".join(f"- {text}" for text in snapshot.text_blocks))
+    if snapshot.links:
+        sections.append("## 主要链接\n\n" + "\n".join(f"- [{text}]({href})" for text, href in snapshot.links))
+    if snapshot.images:
+        sections.append("## 图片\n\n" + "\n".join(f"- [{label}]({src})" for label, src in snapshot.images))
+    if not sections:
+        sections.append("## 页面快照\n\n未检测到可提取的可见正文内容。")
+    return "\n\n".join(sections)
+
+
+def compact_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        return value
+    path = parsed.path or "/"
+    query_match = re.search(r"(?:^|&)q=([^&]+)", parsed.query)
+    if query_match:
+        return f"{parsed.scheme}://{parsed.netloc}{path}?q={query_match.group(1)}"
+    if len(value) <= 180:
+        return value
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def unique_preserve_order(values) -> list:
+    result = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def markdown_from_node(node) -> str:

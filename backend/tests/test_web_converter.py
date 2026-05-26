@@ -2,7 +2,15 @@ import re
 
 from bs4 import BeautifulSoup
 
-from app.converters.web import clean_markdown, extract_image_source, markdown_from_node, normalize_links, select_content_candidate
+from app.converters.web import (
+    build_page_snapshot,
+    clean_markdown,
+    extract_image_source,
+    markdown_from_node,
+    normalize_links,
+    render_page_snapshot_markdown,
+    select_content_candidate,
+)
 
 
 def test_docs_page_extraction_prefers_main_content_over_nav_noise():
@@ -135,3 +143,38 @@ def test_normalize_links_and_image_source_handle_relative_and_lazy_assets():
     images = soup.find_all("img")
     assert extract_image_source(images[0], "https://example.com/base/page") == "https://example.com/images/hero.png"
     assert extract_image_source(images[1], "https://example.com/base/page") == "https://example.com/large.png"
+
+
+def test_page_snapshot_outputs_controls_visible_text_and_compact_links():
+    html = """
+    <html>
+      <head>
+        <title>搜索 - Example</title>
+        <meta name="description" content="用于搜索网页内容的首页。">
+      </head>
+      <body>
+        <form role="search">
+          <input type="search" aria-label="输入搜索词" name="q">
+          <input type="hidden" name="form" value="HP">
+          <input type="submit" value="搜索">
+        </form>
+        <a href="/images">图片</a>
+        <a href="/search?q=%E7%83%AD%E7%82%B9&filters=very-long-noise">1 热点新闻</a>
+        <h1>每日壁纸</h1>
+        <p>盛开的羽扇豆，北加利福尼亚州，美国</p>
+        <img src="/th?id=hero" alt="羽扇豆">
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    snapshot = build_page_snapshot(soup, "https://example.com/", "搜索")
+    markdown = render_page_snapshot_markdown(snapshot)
+
+    assert "## 页面描述" in markdown
+    assert "input:search - 输入搜索词" in markdown
+    assert "input:submit - 搜索" in markdown
+    assert "input:hidden" not in markdown
+    assert "盛开的羽扇豆" in markdown
+    assert "[图片](https://example.com/images)" in markdown
+    assert "[1 热点新闻](https://example.com/search?q=%E7%83%AD%E7%82%B9)" in markdown
+    assert "[羽扇豆](https://example.com/th?id=hero)" in markdown

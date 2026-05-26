@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     redirect_limit: int = 5
     max_images_per_job: int = 30
     allow_rfc2544_proxy_network: bool = True
+    web_render_enabled: bool = True
+    web_render_timeout_seconds: float = 15
+    web_render_wait_ms: int = 1200
+    web_snapshot_max_text_blocks: int = 80
+    web_snapshot_max_links: int = 80
+    web_snapshot_max_images: int = 30
 
     user_concurrency_limit: int = 3
     guest_concurrency_limit: int = 1
