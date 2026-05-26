@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Copy, Download, RefreshCcw, Trash2 } from "lucide-react";
-import { deleteJob, downloadUrl, getJob, getMarkdown } from "@/lib/api";
+import { deleteJob, downloadUrl, getJob, getMarkdown, retryJob } from "@/lib/api";
 import type { Job } from "@/lib/types";
 import { ProgressBar } from "@/components/progress-bar";
 import { StatusBadge } from "@/components/status-badge";
@@ -51,6 +51,13 @@ export default function JobPage() {
   async function remove() {
     await deleteJob(params.id);
     router.push("/");
+  }
+
+  async function retry() {
+    setMarkdown("");
+    setError("");
+    const nextJob = await retryJob(params.id);
+    setJob(nextJob);
   }
 
   return (
@@ -142,6 +149,11 @@ export default function JobPage() {
               <dd style={{ margin: 0 }}>{new Date(job.expires_at).toLocaleString()}</dd>
             </dl>
             <div style={{ display: "grid", gap: 8, marginTop: 18 }}>
+              {job.status === "failed" && (
+                <button className="btn" type="button" onClick={retry}>
+                  <RefreshCcw size={17} /> 重新转换
+                </button>
+              )}
               <Link className="btn" href="/">
                 <RefreshCcw size={17} /> 重新转换
               </Link>
@@ -152,4 +164,3 @@ export default function JobPage() {
     </main>
   );
 }
-

@@ -81,6 +81,12 @@ export async function deleteJob(id: string) {
   await apiFetch(`/jobs/${id}${suffix}`, { method: "DELETE" });
 }
 
+export async function retryJob(id: string): Promise<Job> {
+  const guest = getGuestToken(id);
+  const suffix = guest ? `?guest_token=${encodeURIComponent(guest)}` : "";
+  return apiFetch<Job>(`/jobs/${id}/retry${suffix}`, { method: "POST" });
+}
+
 export async function login(email: string, password: string) {
   const payload = await apiFetch<{ access_token: string; user: User }>("/auth/login", {
     method: "POST",
@@ -109,4 +115,3 @@ export async function listJobs(filters: { type?: SourceType | ""; status?: strin
   const query = params.toString();
   return apiFetch<{ jobs: Job[] }>(`/jobs${query ? `?${query}` : ""}`);
 }
-

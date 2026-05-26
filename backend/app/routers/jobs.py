@@ -227,6 +227,36 @@ def download_job(format: str = "zip", job: Job = Depends(get_accessible_job)) ->
     return FileResponse(path, media_type=media_type, filename=filename)
 
 
+@router.post("/{job_id}/retry", response_model=JobPublic, status_code=status.HTTP_202_ACCEPTED)
+def retry_job(job: Job = Depends(get_accessible_job), db: Session = Depends(get_db)) -> JobPublic:
+    if job.status not in {JobStatus.failed, JobStatus.expired, JobStatus.succeeded}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only finished jobs can be retried")
+    if job.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    job.status = JobStatus.pending
+    job.progress = 0
+    job.error_message = None
+    job.started_at = None
+    job.completed_at = None
+    job.markdown_path = None
+    job.zip_path = None
+    job.metadata_json = {}
+    job.expires_at = datetime.now(timezone.utc) + (
+        timedelta(days=settings.user_retention_days) if job.owner_user_id else timedelta(hours=settings.guest_retention_hours)
+    )
+    db.commit()
+    try:
+        enqueue_job(job.id, job.queue_name)
+    except Exception as exc:
+        job.status = JobStatus.failed
+        job.error_message = "Failed to enqueue conversion job"
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=job.error_message) from exc
+    db.refresh(job)
+    return JobPublic.model_validate(job)
+
+
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job(job: Job = Depends(get_accessible_job), db: Session = Depends(get_db)) -> None:
     job.deleted_at = datetime.now(timezone.utc)

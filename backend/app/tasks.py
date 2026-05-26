@@ -1,12 +1,13 @@
 import asyncio
 import threading
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 
 from app.celery_app import celery_app
+from app.config import settings
 from app.converters.documents import convert_by_extension, convert_html, convert_text
 from app.converters.media import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, convert_audio, convert_video_file, convert_video_url
 from app.converters.web import convert_webpage
@@ -168,6 +169,20 @@ def cleanup_expired_jobs() -> int:
     removed = 0
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
+        timeout_before = now - timedelta(minutes=settings.job_timeout_minutes)
+        stuck_jobs = db.scalars(
+            select(Job).where(
+                Job.deleted_at.is_(None),
+                Job.status.in_([JobStatus.pending, JobStatus.processing]),
+                Job.updated_at < timeout_before,
+            )
+        ).all()
+        for job in stuck_jobs:
+            job.status = JobStatus.failed
+            job.error_message = f"Conversion timed out after {settings.job_timeout_minutes} minutes"
+            job.completed_at = now
+            log(db, job, "error", job.error_message)
+
         jobs = db.scalars(
             select(Job).where(Job.deleted_at.is_(None), Job.expires_at < now)
         ).all()

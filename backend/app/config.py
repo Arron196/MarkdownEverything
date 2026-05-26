@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     user_concurrency_limit: int = 3
     guest_concurrency_limit: int = 1
+    job_timeout_minutes: int = 60
     guest_retention_hours: int = 24
     user_retention_days: int = 7
     raw_input_retention_hours: int = 12
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
 
     asr_provider: str = "local_whisper"
     local_whisper_model: str = "base"
+    local_whisper_device: str = "cpu"
+    local_whisper_compute_type: str = "int8"
     asr_base_url: str = ""
     asr_api_key: str = ""
     asr_model: str = "whisper-1"

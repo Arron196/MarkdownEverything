@@ -24,3 +24,6 @@ def test_create_text_job_to_markdown(tmp_path, monkeypatch):
         assert markdown_response.status_code == 200
         assert "Hello MarkdownEverything" in markdown_response.json()["markdown"]
 
+        download_response = client.get(f"/api/jobs/{job_id}/download", params={"guest_token": guest_token, "format": "zip"})
+        assert download_response.status_code == 200
+        assert download_response.headers["content-type"] == "application/zip"

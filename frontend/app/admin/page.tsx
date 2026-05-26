@@ -15,6 +15,16 @@ type Stats = {
   storage_bytes: number;
 };
 
+type Capabilities = {
+  ffmpeg: boolean;
+  ffprobe: boolean;
+  yt_dlp: boolean;
+  local_asr: boolean;
+  cloud_asr_configured: boolean;
+  ai_summary_configured: boolean;
+  asr_provider: string;
+};
+
 type LogRow = {
   id: number;
   job_id: string;
@@ -28,6 +38,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -39,10 +50,12 @@ export default function AdminPage() {
           apiFetch<Job[]>("/admin/jobs"),
           apiFetch<LogRow[]>("/admin/logs")
         ]);
+        const health = await apiFetch<{ capabilities: Capabilities }>("/admin/health");
         setStats(statsPayload);
         setUsers(usersPayload);
         setJobs(jobsPayload);
         setLogs(logsPayload);
+        setCapabilities(health.capabilities);
       } catch (err) {
         setError(err instanceof Error ? err.message : "读取管理后台失败");
       }
@@ -87,6 +100,27 @@ export default function AdminPage() {
 
         <aside style={{ display: "grid", gap: 18 }}>
           <section className="panel" style={{ padding: 16 }}>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Worker 状态</h2>
+            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+              {capabilities &&
+                Object.entries({
+                  ffmpeg: capabilities.ffmpeg,
+                  ffprobe: capabilities.ffprobe,
+                  "yt-dlp": capabilities.yt_dlp,
+                  "本地 ASR": capabilities.local_asr,
+                  "云端 ASR": capabilities.cloud_asr_configured,
+                  "AI 摘要": capabilities.ai_summary_configured
+                }).map(([label, ok]) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <span>{label}</span>
+                    <strong style={{ color: ok ? "var(--primary)" : "var(--danger)" }}>{ok ? "可用" : "未配置"}</strong>
+                  </div>
+                ))}
+              {capabilities && <div className="muted" style={{ fontSize: 13 }}>ASR provider: {capabilities.asr_provider}</div>}
+            </div>
+          </section>
+
+          <section className="panel" style={{ padding: 16 }}>
             <h2 style={{ margin: 0, fontSize: 18 }}>用户管理</h2>
             <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
               {users.map((user) => (
@@ -129,4 +163,3 @@ const cellStyle: React.CSSProperties = {
   fontSize: 14,
   verticalAlign: "middle"
 };
-

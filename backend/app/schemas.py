@@ -67,3 +67,12 @@ class AdminStats(BaseModel):
     failed: int
     storage_bytes: int
 
+
+class CapabilityStatus(BaseModel):
+    ffmpeg: bool
+    ffprobe: bool
+    yt_dlp: bool
+    local_asr: bool
+    cloud_asr_configured: bool
+    ai_summary_configured: bool
+    asr_provider: str

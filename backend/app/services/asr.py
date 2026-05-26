@@ -25,25 +25,40 @@ def seconds_to_timestamp(value: float | int | None) -> str:
 class LocalWhisperProvider:
     def transcribe(self, audio_path: Path) -> dict:
         try:
-            import whisper  # type: ignore
+            from faster_whisper import WhisperModel  # type: ignore
         except Exception as exc:
             raise RuntimeError(
-                "Local Whisper is not installed. Use ASR_PROVIDER=cloud_openai_compatible or install openai-whisper."
+                "Local ASR is not available. Install faster-whisper or use ASR_PROVIDER=cloud_openai_compatible with ASR_API_KEY."
             ) from exc
-        model = whisper.load_model(settings.local_whisper_model)
-        return model.transcribe(str(audio_path), verbose=False)
+        model = WhisperModel(
+            settings.local_whisper_model,
+            device=settings.local_whisper_device,
+            compute_type=settings.local_whisper_compute_type,
+        )
+        segments, info = model.transcribe(str(audio_path), vad_filter=True)
+        normalized_segments = [
+            {"start": segment.start, "end": segment.end, "text": segment.text}
+            for segment in segments
+        ]
+        return {
+            "language": getattr(info, "language", None),
+            "duration": getattr(info, "duration", None),
+            "text": " ".join(segment["text"].strip() for segment in normalized_segments).strip(),
+            "segments": normalized_segments,
+        }
 
 
 class CloudOpenAICompatibleProvider:
     def transcribe(self, audio_path: Path) -> dict:
-        if not settings.asr_api_key:
+        api_key = settings.asr_api_key or settings.ai_api_key
+        if not api_key:
             raise RuntimeError("ASR_API_KEY is required for cloud_openai_compatible ASR")
         base_url = (settings.asr_base_url or settings.ai_base_url).rstrip("/")
         with httpx.Client(timeout=180) as client:
             with audio_path.open("rb") as handle:
                 response = client.post(
                     f"{base_url}/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {settings.asr_api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     files={"file": (audio_path.name, handle, "application/octet-stream")},
                     data={"model": settings.asr_model, "response_format": "verbose_json"},
                 )
@@ -99,4 +114,3 @@ def probe_duration(media_path: Path) -> str | None:
         return seconds_to_timestamp(float(payload["format"]["duration"]))
     except Exception:
         return None
-

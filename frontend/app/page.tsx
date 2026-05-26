@@ -34,12 +34,22 @@ export default function HomePage() {
     try {
       const form = new FormData();
       if (mode === "url") {
-        form.set("url", url);
+        if (!url.trim()) throw new Error("请输入 URL");
+        form.set("url", url.trim());
         form.set("source_type", sourceType);
       }
-      if (mode === "file" && file) form.set("file", file);
-      if (mode === "text") form.set("text", text);
-      if (mode === "html") form.set("html", text);
+      if (mode === "file") {
+        if (!file) throw new Error("请选择要转换的文件");
+        form.set("file", file);
+      }
+      if (mode === "text") {
+        if (!text.trim()) throw new Error("请输入文本内容");
+        form.set("text", text);
+      }
+      if (mode === "html") {
+        if (!text.trim()) throw new Error("请输入 HTML 内容");
+        form.set("html", text);
+      }
       const response = await createJob(form);
       if (response.guest_token) setGuestToken(response.job.id, response.guest_token);
       router.push(`/jobs/${response.job.id}`);
@@ -106,8 +116,13 @@ export default function HomePage() {
                 <UploadCloud size={32} color="var(--primary)" />
                 <strong style={{ marginTop: 8 }}>{file ? file.name : "选择或拖入文件"}</strong>
                 <span className="muted" style={{ marginTop: 4 }}>
-                  支持 PDF、DOCX、HTML、TXT、CSV、音频和视频
+                  {file ? `${formatBytes(file.size)} · ${file.type || "未知类型"}` : "支持 PDF、DOCX、HTML、TXT、CSV、音频和视频"}
                 </span>
+                {file && isMediaFile(file.name) && (
+                  <span className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+                    音视频会提取音频并转写。Docker 部署已内置 ffmpeg，本地运行需要配置 ASR。
+                  </span>
+                )}
                 <input type="file" onChange={onFileChange} style={{ display: "none" }} />
               </label>
             )}
@@ -152,3 +167,12 @@ export default function HomePage() {
   );
 }
 
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function isMediaFile(name: string) {
+  return /\.(mp3|wav|m4a|aac|ogg|flac|mp4|mov|mkv|webm)$/i.test(name);
+}

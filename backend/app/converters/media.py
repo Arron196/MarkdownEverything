@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
@@ -13,6 +14,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 
 
 def extract_audio(video_path: Path, output_dir: Path) -> Path:
+    ensure_command("ffmpeg", "Video conversion requires ffmpeg. Install ffmpeg or use the Docker Compose deployment.")
     audio_path = output_dir / f"{video_path.stem}.wav"
     subprocess.run(
         ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(audio_path)],
@@ -25,6 +27,8 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path:
 
 def download_video_audio(url: str, output_dir: Path) -> tuple[Path, dict]:
     assert_public_url(url)
+    ensure_command("yt-dlp", "Video URL conversion requires yt-dlp. Install yt-dlp or use the Docker Compose deployment.")
+    ensure_command("ffmpeg", "Video URL conversion requires ffmpeg. Install ffmpeg or use the Docker Compose deployment.")
     output_template = str(output_dir / "download.%(ext)s")
     options = {
         "outtmpl": output_template,
@@ -43,6 +47,11 @@ def download_video_audio(url: str, output_dir: Path) -> tuple[Path, dict]:
             raise RuntimeError("yt-dlp did not produce a downloadable media file")
         downloaded = candidates[0]
     return downloaded, info
+
+
+def ensure_command(command: str, message: str) -> None:
+    if shutil.which(command) is None:
+        raise RuntimeError(message)
 
 
 def convert_audio(path: Path) -> ConversionResult:
@@ -82,4 +91,3 @@ def convert_video_url(url: str, work_dir: Path) -> ConversionResult:
         result.duration = seconds_to_timestamp(info["duration"])
     result.metadata.update({"extractor": info.get("extractor"), "webpage_url": info.get("webpage_url")})
     return result
-

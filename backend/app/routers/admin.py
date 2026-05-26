@@ -9,6 +9,7 @@ from app.db import get_db
 from app.models import Job, JobLog, JobStatus, User
 from app.schemas import AdminStats, JobPublic, UserPublic
 from app.storage import storage_usage_bytes
+from app.system import get_capabilities
 
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_admin_user)])
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_ad
 
 @router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "checked_at": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "checked_at": datetime.now(timezone.utc).isoformat(), "capabilities": get_capabilities()}
 
 
 @router.get("/stats", response_model=AdminStats)
@@ -74,4 +75,3 @@ def workers() -> dict:
         "reserved": inspector.reserved() or {},
         "stats": inspector.stats() or {},
     }
-

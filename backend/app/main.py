@@ -8,6 +8,7 @@ from app.db import SessionLocal, create_all
 from app.models import User, UserRole
 from app.routers import admin, auth, jobs
 from app.security import get_password_hash
+from app.system import get_capabilities
 
 
 app = FastAPI(title=settings.app_name, docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -52,7 +53,7 @@ def bootstrap_admin() -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "app": settings.app_name}
+    return {"status": "ok", "app": settings.app_name, "capabilities": get_capabilities()}
 
 
 app.include_router(auth.router, prefix="/api")
