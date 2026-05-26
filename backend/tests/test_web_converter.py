@@ -26,6 +26,8 @@ from app.converters.web_extractors.utils import (
     markdown_from_node,
     normalize_links,
 )
+from app.converters.web_extractors.wikipedia import extract as wikipedia_extract
+from app.converters.web_extractors.wikipedia import wikipedia_article_markdown
 
 
 def test_docs_page_extraction_prefers_main_content_over_nav_noise():
@@ -513,6 +515,94 @@ def test_nodeseek_post_markdown_extracts_thread_posts_without_sidebar_noise():
     assert "所有版块" not in markdown
     assert "快捷功能区" not in markdown
     assert "comment-menu" not in markdown
+
+
+def test_wikipedia_article_markdown_extracts_article_without_language_or_edit_noise():
+    html = """
+    <html>
+      <head><title>纽约时报 - 维基百科，自由的百科全书</title></head>
+      <body>
+        <div id="p-lang-btn" class="mw-portlet-lang">
+          <a>Afrikaans</a><a>English</a><a>日本語</a>
+        </div>
+        <h1 id="firstHeading"><span class="mw-page-title-main">纽约时报</span></h1>
+        <div id="mw-content-text" class="mw-body-content">
+          <div class="mw-parser-output">
+            <table class="ambox"><tr><td>此条目可参照英语维基百科扩充。</td></tr></table>
+            <div class="hatnote">此条目介绍的是报纸。</div>
+            <table class="infobox">
+              <tr><th colspan="2">纽约时报</th></tr>
+              <tr><td colspan="2"><img src="//upload.wikimedia.org/logo.png" alt="Logo"></td></tr>
+              <tr><th>类型</th><td>日报</td></tr>
+              <tr><th>创刊日</th><td>1851年9月18日</td></tr>
+            </table>
+            <p>《纽约时报》（英语：<i>The New York Times</i>）是一份总部设在
+              <a href="/wiki/%E7%BA%BD%E7%BA%A6">纽约</a> 的美国报纸。<sup class="reference">[1]</sup>
+            </p>
+            <div class="mw-heading mw-heading2"><h2>历史 <span class="mw-editsection">[编辑]</span></h2></div>
+            <p>1851年9月18日，亨利·J·雷蒙德和乔治·琼斯创立了《纽约每日时报》。</p>
+            <div class="navbox">展开 查 论 编 美国报纸</div>
+            <div class="reflist"><ol><li>参考资料噪声</li></ol></div>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    markdown = wikipedia_article_markdown(
+        soup,
+        "https://zh.wikipedia.org/zh-cn/%E7%BA%BD%E7%BA%A6%E6%97%B6%E6%8A%A5",
+        "纽约时报",
+    )
+
+    assert markdown is not None
+    assert markdown.startswith("# 纽约时报")
+    assert "## 摘要" in markdown
+    assert "## 正文" in markdown
+    assert "| 类型 | 日报 |" in markdown
+    assert "[Logo](https://upload.wikimedia.org/logo.png)" in markdown
+    assert "## 图片资源" in markdown
+    assert "[纽约](https://zh.wikipedia.org/wiki/%E7%BA%BD%E7%BA%A6)" in markdown
+    assert "## 历史" in markdown
+    assert "1851年9月18日" in markdown
+    assert "Afrikaans" not in markdown
+    assert "[编辑]" not in markdown
+    assert "此条目可参照" not in markdown
+    assert "展开 查 论 编" not in markdown
+    assert "参考资料噪声" not in markdown
+
+
+def test_wikipedia_extractor_supports_all_language_domains_and_variant_paths():
+    html = """
+    <html>
+      <body>
+        <h1 id="firstHeading"><span class="mw-page-title-main">Example Article</span></h1>
+        <div id="mw-content-text">
+          <div class="mw-parser-output">
+            <p>This article has enough text to be treated as a real Wikipedia article across language editions.
+            It should be extracted from MediaWiki parser output rather than matched by a language-specific URL.</p>
+            <div class="mw-heading mw-heading2"><h2>History</h2></div>
+            <p>History paragraph with useful encyclopedic content and internal links.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    urls = [
+        "https://en.wikipedia.org/wiki/The_New_York_Times",
+        "https://ja.wikipedia.org/wiki/%E3%83%8B%E3%83%A5%E3%83%BC%E3%83%A8%E3%83%BC%E3%82%AF",
+        "https://zh.wikipedia.org/zh-cn/%E7%BA%BD%E7%BA%A6%E6%97%B6%E6%8A%A5",
+        "https://fr.wikipedia.org/wiki/Le_Monde",
+    ]
+
+    for url in urls:
+        result = wikipedia_extract(WebExtractorContext(soup=soup, base_url=url, title="Example Article"))
+        assert result is not None
+        assert result.name == "wikipedia-article"
+        assert "Example Article" in result.body
+        assert "History paragraph" in result.body
 
 
 def test_specialized_extractor_registry_selects_highest_scoring_match(monkeypatch):

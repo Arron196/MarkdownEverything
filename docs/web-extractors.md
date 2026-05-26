@@ -10,6 +10,7 @@ The core converter still handles fetching, SSRF checks, browser rendering, gener
 - `discourse.py`: extracts Discourse forum topics into topic metadata, post index, and per-post Markdown.
 - `nodeseek.py`: extracts NodeSeek forum posts into topic metadata, floor index, and per-floor Markdown without sidebar, login, and forum navigation noise.
 - `snapshot.py`: fallback for dynamic app/home/search pages. It outputs page description, metadata, visible headings, controls, text blocks, lists, tables, links, images, and media URLs.
+- `wikipedia.py`: extracts Wikipedia articles across languages from the parser output, preserving article text, headings, infoboxes, tables, and media while removing language switchers, edit controls, notices, references, and navigation boxes.
 
 ## Compatibility Benchmark
 
