@@ -9,10 +9,21 @@ import httpx
 import trafilatura
 from bs4 import BeautifulSoup, Comment
 from fastapi import HTTPException, status
-from markdownify import markdownify as md
 
 from app.config import settings
 from app.converters.base import ConversionResult
+from app.converters.web_extractors import SNAPSHOT_EXTRACTOR, WebExtractorContext, run_specialized_extractors
+from app.converters.web_extractors.discourse import discourse_topic_markdown
+from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
+from app.converters.web_extractors.utils import (
+    clean_markdown,
+    extract_image_source,
+    is_placeholder_image,
+    markdown_from_node,
+    normalize_links,
+    normalize_text,
+    visible_text,
+)
 from app.services.url_security import assert_public_url
 
 try:
@@ -95,18 +106,6 @@ NAV_PENALTY_TERMS = [
     "广告",
 ]
 
-IMAGE_SOURCE_ATTRS = [
-    "src",
-    "data-src",
-    "data-original",
-    "data-lazy-src",
-    "data-image",
-    "data-url",
-]
-
-IMAGE_SRCSET_ATTRS = ["srcset", "data-srcset"]
-
-
 @dataclass
 class ContentCandidate:
     name: str
@@ -120,17 +119,6 @@ class RenderedPage:
     html: str
     title: str | None
     final_url: str
-
-
-@dataclass
-class PageSnapshot:
-    title: str
-    description: str | None
-    headings: list[str]
-    text_blocks: list[str]
-    controls: list[str]
-    links: list[tuple[str, str]]
-    images: list[tuple[str, str]]
 
 
 async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
@@ -187,17 +175,25 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
 
     body = clean_markdown(body, title)
     extractor_name = candidate.name
-    discourse_body = discourse_topic_markdown(soup, final_url, title)
-    if discourse_body and (rendered_page is not None or len(discourse_body) > len(body)):
-        body = discourse_body
-        extractor_name = "discourse-topic"
+    extractor_context = WebExtractorContext(
+        soup=soup,
+        base_url=final_url,
+        title=title,
+        rendered=rendered_page is not None,
+        metadata={"candidate": candidate.name, "candidate_score": candidate.score},
+    )
+    specialized_result = run_specialized_extractors(extractor_context)
+    if specialized_result and (rendered_page is not None or len(specialized_result.body) > len(body)):
+        body = specialized_result.body
+        extractor_name = specialized_result.name
 
-    if discourse_body is None and (
+    if specialized_result is None and (
         not meaningful_body(body) or should_use_snapshot_body(candidate, body, rendered_page is not None)
     ):
-        snapshot = build_page_snapshot(soup, final_url, title)
-        body = render_page_snapshot_markdown(snapshot)
-        extractor_name = "rendered-snapshot" if rendered_page else "static-snapshot"
+        snapshot_result = SNAPSHOT_EXTRACTOR(extractor_context)
+        if snapshot_result:
+            body = snapshot_result.body
+            extractor_name = snapshot_result.name
 
     return ConversionResult(
         title=title.strip(),
@@ -521,7 +517,22 @@ def clean_content_node(node) -> None:
         if tag.name in {"p", "li", "span", "div"} and not visible_text(tag) and not tag.find(["img", "pre", "code", "table"]):
             tag.decompose()
             continue
-        allowed_attrs = {"href", "src", "alt", "title", "datetime", "srcset", "width", "height", *IMAGE_SOURCE_ATTRS, *IMAGE_SRCSET_ATTRS}
+        allowed_attrs = {
+            "href",
+            "src",
+            "alt",
+            "title",
+            "datetime",
+            "srcset",
+            "data-src",
+            "data-srcset",
+            "data-original",
+            "data-lazy-src",
+            "data-image",
+            "data-url",
+            "width",
+            "height",
+        }
         tag.attrs = {key: value for key, value in tag.attrs.items() if key in allowed_attrs}
 
 
@@ -585,410 +596,11 @@ def is_agent_docs_block(text: str) -> bool:
     return "documentation index" in lowered and "llms.txt" in lowered
 
 
-def normalize_links(node, base_url: str) -> None:
-    for anchor in list(node.find_all("a")):
-        href = anchor.get("href")
-        if not isinstance(href, str) or not href.strip():
-            continue
-        href = href.strip()
-        parsed = urlparse(href)
-        if href.startswith("#") or parsed.scheme in {"mailto", "tel"}:
-            anchor["href"] = href
-            continue
-        if parsed.scheme and parsed.scheme not in {"http", "https"}:
-            anchor.unwrap()
-            continue
-        anchor["href"] = urljoin(base_url, href)
-
-
-def discourse_topic_markdown(soup: BeautifulSoup, base_url: str, title: str) -> str | None:
-    posts = []
-    for index, post in enumerate(soup.select("[data-post-id]"), start=1):
-        cooked = post.select_one(".cooked")
-        if not cooked or len(visible_text(cooked)) < 2:
-            continue
-        cooked_copy = deepcopy(cooked)
-        clean_discourse_post(cooked_copy)
-        normalize_links(cooked_copy, base_url)
-        post_markdown = clean_markdown(markdown_from_node(cooked_copy), "")
-        if not post_markdown:
-            continue
-        author = discourse_post_author(post)
-        published_at = discourse_post_date(post)
-        post_url = discourse_post_url(post, base_url, index)
-        posts.append(
-            {
-                "index": index,
-                "author": author,
-                "published_at": published_at,
-                "url": post_url,
-                "markdown": post_markdown,
-            }
-        )
-
-    if not posts:
-        return None
-
-    category_tags = discourse_topic_tags(soup)
-    sections = []
-    if category_tags:
-        sections.append("## 主题信息\n\n" + "\n".join(f"- {item}" for item in category_tags))
-    sections.append(
-        "## 帖子目录\n\n"
-        + "\n".join(
-            f"- #{post['index']} {post['author'] or 'Unknown'}"
-            + (f" · {post['published_at']}" if post["published_at"] else "")
-            + (f" · {post['url']}" if post["url"] else "")
-            for post in posts
-        )
-    )
-    for post in posts:
-        heading = f"## #{post['index']} {post['author'] or 'Unknown'}"
-        meta = []
-        if post["published_at"]:
-            meta.append(f"- 发布时间：{post['published_at']}")
-        if post["url"]:
-            meta.append(f"- 原帖链接：{post['url']}")
-        meta_markdown = "\n".join(meta)
-        sections.append(f"{heading}\n\n{meta_markdown}\n\n{post['markdown']}".strip())
-    return "\n\n".join(sections).strip()
-
-
-def clean_discourse_post(node) -> None:
-    for tag in list(
-        node.select(
-            "script, style, button, svg, .codeblock-button-wrapper, .cooked-selection-barrier, "
-            ".lightbox-wrapper, .meta, .post-menu-area, .topic-map"
-        )
-    ):
-        if tag.parent is not None:
-            tag.decompose()
-    for tag in node.find_all(True):
-        if tag.attrs is None:
-            continue
-        tag.attrs = {
-            key: value
-            for key, value in tag.attrs.items()
-            if key in {"href", "src", "alt", "title"}
-        }
-
-
-def discourse_post_author(post) -> str | None:
-    for selector in [".names .username a", ".username a", ".names .first a", "[data-user-card]"]:
-        node = post.select_one(selector)
-        if node:
-            text = normalize_text(node.get_text(" ", strip=True))
-            if text:
-                return text
-    return None
-
-
-def discourse_post_date(post) -> str | None:
-    node = post.select_one(".relative-date")
-    if not node:
-        return None
-    title = node.get("title")
-    if isinstance(title, str) and title.strip():
-        return normalize_text(title)
-    return normalize_text(node.get_text(" ", strip=True)) or None
-
-
-def discourse_post_url(post, base_url: str, index: int) -> str | None:
-    node = post.select_one(".post-date[href], .post-date a[href], .relative-date")
-    href = None
-    if node:
-        href = node.get("href")
-        if not href:
-            parent_link = node.find_parent("a")
-            href = parent_link.get("href") if parent_link else None
-    if isinstance(href, str) and href.strip():
-        return urljoin(base_url, href)
-    parsed = urlparse(base_url)
-    if parsed.scheme and parsed.netloc and index > 1:
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/{index}"
-    return base_url
-
-
-def discourse_topic_tags(soup: BeautifulSoup) -> list[str]:
-    items: list[str] = []
-    category = soup.select_one(".badge-category__name, .category-name")
-    if category:
-        text = normalize_text(category.get_text(" ", strip=True))
-        if text:
-            items.append(f"分类：{text}")
-    tags = unique_preserve_order(
-        normalize_text(tag.get_text(" ", strip=True))
-        for tag in soup.select(".discourse-tag, .tag-entity")
-        if normalize_text(tag.get_text(" ", strip=True))
-    )
-    if tags:
-        items.append("标签：" + "、".join(tags[:12]))
-    return items
-
-
-def build_page_snapshot(soup: BeautifulSoup, base_url: str, title: str) -> PageSnapshot:
-    visible_root = deepcopy(soup.body or soup)
-    clean_snapshot_node(visible_root)
-    normalize_links(visible_root, base_url)
-    description = metadata_value(soup, "description") or metadata_value(soup, "og:description")
-    headings = unique_preserve_order(
-        normalize_text(tag.get_text(" ", strip=True))
-        for tag in visible_root.find_all(re.compile(r"^h[1-6]$"))
-        if normalize_text(tag.get_text(" ", strip=True))
-    )[:30]
-    controls = extract_controls(visible_root)
-    text_blocks = extract_text_blocks(visible_root)
-    links = extract_snapshot_links(visible_root)
-    images = extract_snapshot_images(visible_root, base_url)
-    return PageSnapshot(
-        title=title,
-        description=description,
-        headings=headings,
-        text_blocks=text_blocks,
-        controls=controls,
-        links=links,
-        images=images,
-    )
-
-
-def clean_snapshot_node(node) -> None:
-    for comment in node.find_all(string=lambda value: isinstance(value, Comment)):
-        comment.extract()
-    for tag in list(
-        node.select(
-            "script, style, noscript, template, svg, iframe, object, embed, canvas, "
-            "[hidden], [aria-hidden='true'], [style*='display:none'], [style*='display: none'], "
-            "[style*='visibility:hidden'], [style*='visibility: hidden']"
-        )
-    ):
-        if tag.parent is not None:
-            tag.decompose()
-
-
-def extract_controls(node) -> list[str]:
-    controls: list[str] = []
-    for tag in node.find_all(["input", "textarea", "select", "button"]):
-        if is_invisible_control(tag):
-            continue
-        label = control_label(tag)
-        if not label:
-            continue
-        control_type = tag.name
-        if tag.name == "input":
-            control_type = f"input:{tag.get('type', 'text')}"
-        controls.append(f"{control_type} - {label}")
-    return unique_preserve_order(controls)[:40]
-
-
-def is_invisible_control(tag) -> bool:
-    input_type = normalize_text(tag.get("type", "")).lower()
-    if input_type == "hidden":
-        return True
-    if input_type in {"submit", "reset", "button", "image"} and not control_label(tag):
-        return True
-    return bool(tag.find_parent(attrs={"aria-hidden": "true"}))
-
-
-def control_label(tag) -> str:
-    values = [
-        tag.get("aria-label"),
-        tag.get("placeholder"),
-        tag.get("title"),
-        tag.get("alt"),
-        tag.get("value") if tag.name == "button" else None,
-        tag.get("value") if tag.name == "input" and tag.get("type") in {"submit", "button", "reset"} else None,
-        tag.get_text(" ", strip=True),
-    ]
-    for value in values:
-        if isinstance(value, str) and normalize_text(value):
-            return normalize_text(value)
-    if tag.name == "input" and tag.get("type") in {"search", "text", "url", "email", "tel", "number", "password"}:
-        field_name = normalize_text(tag.get("name") or tag.get("id") or "")
-        if field_name.lower() in {"q", "query", "search", "keyword", "keywords"}:
-            return "搜索关键词"
-        return field_name
-    return ""
-
-
-def extract_text_blocks(node) -> list[str]:
-    blocks: list[str] = []
-    for tag in node.find_all(["h1", "h2", "h3", "p", "li", "figcaption", "blockquote", "label"]):
-        text = normalize_text(tag.get_text(" ", strip=True))
-        if not useful_snapshot_text(text):
-            continue
-        blocks.append(text)
-    if len(blocks) < 5:
-        for text in visible_text(node).split("  "):
-            if useful_snapshot_text(text):
-                blocks.append(normalize_text(text))
-    return unique_preserve_order(blocks)[: settings.web_snapshot_max_text_blocks]
-
-
-def useful_snapshot_text(text: str) -> bool:
-    if len(text) < 2:
-        return False
-    if len(text) > 500:
-        return False
-    if re.fullmatch(r"[\W_]+", text, flags=re.UNICODE):
-        return False
-    blocked = {"javascript", "cookie", "cookies"}
-    return text.lower() not in blocked
-
-
-def extract_snapshot_links(node) -> list[tuple[str, str]]:
-    links: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for anchor in node.find_all("a"):
-        href = anchor.get("href")
-        if not isinstance(href, str) or not href.strip():
-            continue
-        text = normalize_text(anchor.get_text(" ", strip=True) or anchor.get("aria-label") or anchor.get("title") or "")
-        if not text:
-            continue
-        parsed = urlparse(href)
-        if parsed.scheme not in {"http", "https", "mailto", "tel"} and not href.startswith("#"):
-            continue
-        item = (text[:120], compact_url(href))
-        if item in seen:
-            continue
-        seen.add(item)
-        links.append(item)
-        if len(links) >= settings.web_snapshot_max_links:
-            break
-    return links
-
-
-def extract_snapshot_images(node, base_url: str) -> list[tuple[str, str]]:
-    images: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for img in node.find_all("img"):
-        image_url = extract_image_source(img, base_url)
-        if not image_url or image_url in seen or is_placeholder_image(img, image_url):
-            continue
-        label = normalize_text(img.get("alt") or img.get("title") or Path(urlparse(image_url).path).name or "image")
-        seen.add(image_url)
-        images.append((label[:120], image_url))
-        if len(images) >= settings.web_snapshot_max_images:
-            break
-    return images
-
-
-def render_page_snapshot_markdown(snapshot: PageSnapshot) -> str:
-    sections: list[str] = []
-    if snapshot.description:
-        sections.append(f"## 页面描述\n\n{snapshot.description.strip()}")
-    if snapshot.headings:
-        sections.append("## 页面标题结构\n\n" + "\n".join(f"- {heading}" for heading in snapshot.headings))
-    if snapshot.controls:
-        sections.append("## 可交互控件\n\n" + "\n".join(f"- {control}" for control in snapshot.controls))
-    if snapshot.text_blocks:
-        sections.append("## 可见文本\n\n" + "\n".join(f"- {text}" for text in snapshot.text_blocks))
-    if snapshot.links:
-        sections.append("## 主要链接\n\n" + "\n".join(f"- [{text}]({href})" for text, href in snapshot.links))
-    if snapshot.images:
-        sections.append("## 图片\n\n" + "\n".join(f"- [{label}]({src})" for label, src in snapshot.images))
-    if not sections:
-        sections.append("## 页面快照\n\n未检测到可提取的可见正文内容。")
-    return "\n\n".join(sections)
-
-
-def compact_url(value: str) -> str:
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"}:
-        return value
-    path = parsed.path or "/"
-    query_match = re.search(r"(?:^|&)q=([^&]+)", parsed.query)
-    if query_match:
-        return f"{parsed.scheme}://{parsed.netloc}{path}?q={query_match.group(1)}"
-    if len(value) <= 180:
-        return value
-    return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-
-def unique_preserve_order(values) -> list:
-    result = []
-    seen = set()
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
-
-
-def markdown_from_node(node) -> str:
-    return md(
-        str(node),
-        heading_style="ATX",
-        bullets="-",
-        strip=["script", "style"],
-    )
-
-
 def meaningful_body(body: str) -> bool:
     text = re.sub(r"[\s#`|\\-]+", "", body)
     return len(text) > MIN_MEANINGFUL_TEXT_LENGTH
 
 
-def clean_markdown(body: str, title: str) -> str:
-    text = body.replace("\u200b", "").replace("\xa0", " ")
-    text = re.sub(r"\r\n?", "\n", text)
-    text = re.sub(r"(?m)^(#{1,6})\s*\n+([^#`\n][^\n]{0,140})\s*$", r"\1 \2", text)
-    text = re.sub(
-        r"(?is)(?:^|\n)>?\s*#{1,6}\s*Documentation Index\b.{0,1200}?Use this file to discover all available pages before exploring further\.?",
-        "\n",
-        text,
-    )
-    text = re.sub(
-        r"(?im)^\s*(跳转到主要内容|Skip to main content|OpenAI 在 ChatGPT 中打开|Open in ChatGPT)\s*$\n?",
-        "",
-        text,
-    )
-    text = remove_duplicate_title(text, title)
-    text = re.sub(r"(?m)^\s*#{1,6}\s*$\n?", "", text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"\n(#{2,6} )", r"\n\n\1", text)
-    text = re.sub(r"\n(```)", r"\n\n\1", text)
-    text = re.sub(r"```\n{2,}", "```\n", text)
-    text = re.sub(r"\n{2,}```", "\n\n```", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def remove_duplicate_title(text: str, title: str) -> str:
-    if not title.strip():
-        return text
-    title_key = comparable_heading(title)
-    lines = text.splitlines()
-    index = 0
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    if index >= len(lines):
-        return text
-
-    first = lines[index].strip()
-    heading_match = re.match(r"^#{1,6}\s+(.+?)\s*$", first)
-    first_text = heading_match.group(1) if heading_match else first
-    if comparable_heading(first_text) != title_key:
-        return text
-
-    del lines[index]
-    while index < len(lines) and not lines[index].strip():
-        del lines[index]
-    return "\n".join(lines)
-
-
-def comparable_heading(value: str) -> str:
-    return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).lower()
-
-
-def visible_text(node) -> str:
-    return normalize_text(node.get_text(" ", strip=True))
-
-
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value or "").strip()
 
 
 async def download_images(soup: BeautifulSoup, base_url: str, assets_dir: Path) -> list[str]:
@@ -1039,60 +651,6 @@ async def download_images(soup: BeautifulSoup, base_url: str, assets_dir: Path) 
                 continue
 
     return resources
-
-
-def extract_image_source(img, base_url: str) -> str | None:
-    candidates: list[str] = []
-    for attr in IMAGE_SOURCE_ATTRS:
-        value = img.get(attr)
-        if isinstance(value, str) and value.strip():
-            candidates.append(value.strip())
-    for attr in IMAGE_SRCSET_ATTRS:
-        value = img.get(attr)
-        if isinstance(value, str) and value.strip():
-            srcset_url = best_srcset_url(value)
-            if srcset_url:
-                candidates.append(srcset_url)
-
-    for candidate in candidates:
-        if candidate.startswith(("data:", "blob:", "javascript:")):
-            continue
-        absolute = urljoin(base_url, candidate)
-        if urlparse(absolute).scheme in {"http", "https"}:
-            return absolute
-    return None
-
-
-def best_srcset_url(srcset: str) -> str | None:
-    best_url: str | None = None
-    best_score = -1.0
-    for raw_entry in srcset.split(","):
-        parts = raw_entry.strip().split()
-        if not parts:
-            continue
-        url = parts[0]
-        descriptor = parts[1] if len(parts) > 1 else ""
-        score = 1.0
-        if descriptor.endswith("w"):
-            score = float(descriptor[:-1] or 0)
-        elif descriptor.endswith("x"):
-            score = float(descriptor[:-1] or 1) * 1000
-        if score > best_score:
-            best_url = url
-            best_score = score
-    return best_url
-
-
-def is_placeholder_image(img, image_url: str) -> bool:
-    path = urlparse(image_url).path.lower()
-    if re.search(r"(spacer|pixel|tracking|transparent|blank|placeholder)", path):
-        return True
-    try:
-        width = int(str(img.get("width", "0")).replace("px", "") or 0)
-        height = int(str(img.get("height", "0")).replace("px", "") or 0)
-        return 0 < width <= 2 and 0 < height <= 2
-    except ValueError:
-        return False
 
 
 def image_extension(content_type: str, image_url: str) -> str:

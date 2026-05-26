@@ -27,7 +27,7 @@ The first registered user becomes an admin unless `BOOTSTRAP_ADMIN_EMAIL` and `B
 
 ## What Works In This MVP
 
-- Webpage URL to Markdown with SSRF protection, readable-content extraction, metadata, and image asset download.
+- Webpage URL to Markdown with SSRF protection, browser-render fallback, modular extractors, readable-content extraction, metadata, and image asset download.
 - Text, HTML, CSV, PDF, and DOCX conversion with unified Markdown frontmatter and ZIP download.
 - Audio and video conversion through ffmpeg plus ASR. Docker installs ffmpeg and faster-whisper; the first local Whisper run downloads the selected model from Hugging Face.
 - Public video links through yt-dlp, limited to accessible public media and without bypassing login, paywalls, or DRM.
@@ -43,6 +43,12 @@ Audio/video transcription needs one of:
 - Cloud ASR: set `ASR_PROVIDER=cloud_openai_compatible`, `ASR_API_KEY`, optional `ASR_BASE_URL`, and `ASR_MODEL`.
 
 AI summaries need `AI_API_KEY`. Without it, the app uses an extractive fallback summary so conversion still succeeds.
+
+## Extending Webpage Conversion
+
+Site-specific webpage support is modular. Add extractors under `backend/app/converters/web_extractors/` and register them in `registry.py`.
+
+See `docs/web-extractors.md` for the extractor contract and contribution guidelines.
 
 For local development without Redis workers, set:
 

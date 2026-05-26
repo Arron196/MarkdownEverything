@@ -2,15 +2,17 @@ import re
 
 from bs4 import BeautifulSoup
 
-from app.converters.web import (
-    build_page_snapshot,
+import app.converters.web_extractors.registry as extractor_registry
+from app.converters.web import select_content_candidate
+from app.converters.web_extractors.base import WebExtractorContext, WebExtractorResult
+from app.converters.web_extractors.discourse import discourse_topic_markdown
+from app.converters.web_extractors.registry import run_specialized_extractors
+from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
+from app.converters.web_extractors.utils import (
     clean_markdown,
-    discourse_topic_markdown,
     extract_image_source,
     markdown_from_node,
     normalize_links,
-    render_page_snapshot_markdown,
-    select_content_candidate,
 )
 
 
@@ -220,3 +222,22 @@ def test_discourse_topic_markdown_extracts_posts_without_shell_noise():
     assert "codeblock-button-wrapper" not in markdown
     assert "话题 近期活动" not in markdown
     assert "## #2 bob" in markdown
+
+
+def test_specialized_extractor_registry_selects_highest_scoring_match(monkeypatch):
+    soup = BeautifulSoup("<main><p>hello</p></main>", "html.parser")
+    context = WebExtractorContext(soup=soup, base_url="https://example.com", title="Example")
+
+    def low_score_extractor(_context):
+        return WebExtractorResult(name="low", body="low", score=10)
+
+    def high_score_extractor(_context):
+        return WebExtractorResult(name="high", body="high", score=20)
+
+    monkeypatch.setattr(extractor_registry, "SPECIALIZED_EXTRACTORS", [low_score_extractor, high_score_extractor])
+
+    result = run_specialized_extractors(context)
+
+    assert result is not None
+    assert result.name == "high"
+    assert result.body == "high"
