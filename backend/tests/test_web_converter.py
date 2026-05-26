@@ -8,9 +8,14 @@ from bs4 import BeautifulSoup
 import app.converters.web_extractors.registry as extractor_registry
 import app.converters.web as web_converter
 from app.converters.base import ConversionResult
-from app.converters.web import select_content_candidate
+from app.converters.web import select_content_candidate, should_use_specialized_result
 from app.converters.web_extractors.base import WebExtractorContext, WebExtractorResult
-from app.converters.web_extractors.bilibili import extract_home_videos, render_bilibili_home_markdown
+from app.converters.web_extractors.bilibili import (
+    extract_home_videos,
+    extract_video_detail,
+    render_bilibili_home_markdown,
+    render_bilibili_video_markdown,
+)
 from app.converters.web_extractors.discourse import discourse_topic_markdown
 from app.converters.web_extractors.registry import run_specialized_extractors
 from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
@@ -336,6 +341,62 @@ def test_bilibili_home_extractor_renders_video_table():
     assert "| 第一条视频 | 作者A | 32.6万 | 886 | 07:26 | 昨天 | https://www.bilibili.com/video/BV1aaa |" in markdown
     assert "第二条 \\| 视频" in markdown
     assert "https://www.bilibili.com/video/BV1bbb" in markdown
+
+
+def test_bilibili_video_extractor_renders_detail_markdown():
+    html = r"""
+    <html>
+      <head>
+        <title>第一条视频_哔哩哔哩_bilibili</title>
+        <meta name="author" content="作者A">
+        <meta name="keywords" content="第一条视频,NBA,马刺,哔哩哔哩,bilibili">
+      </head>
+      <body>
+        <h1 class="video-title">第一条视频</h1>
+        <div class="recommend-list">推荐视频 A 推荐视频 B 推荐视频 C</div>
+        <script>
+          window.__INITIAL_STATE__={
+            "videoData":{
+              "bvid":"BV1aaa",
+              "aid":123,
+              "title":"第一条视频",
+              "pubdate":1779679313,
+              "duration":446,
+              "desc":"这是视频简介",
+              "pic":"http://i2.hdslb.com/bfs/archive/cover.jpg",
+              "tname_v2":"篮球",
+              "owner":{"mid":10086,"name":"作者A"},
+              "stat":{"view":325806,"danmaku":886,"reply":2273,"like":5874,"coin":715,"favorite":561,"share":345}
+            },
+            "tags":[{"tag_name":"NBA"},{"tag_name":"马刺"}]
+          };(function(){})();
+        </script>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    detail = extract_video_detail(soup, "https://www.bilibili.com/video/BV1aaa/", "第一条视频_哔哩哔哩_bilibili")
+    markdown = render_bilibili_video_markdown(detail)
+
+    assert detail is not None
+    assert detail.bvid == "BV1aaa"
+    assert detail.author == "作者A"
+    assert detail.duration == "07:26"
+    assert detail.cover_url == "https://i2.hdslb.com/bfs/archive/cover.jpg"
+    assert "## 视频信息" in markdown
+    assert "- UP 主：[作者A](https://space.bilibili.com/10086)" in markdown
+    assert "- BV 号：BV1aaa" in markdown
+    assert "- 分区：篮球" in markdown
+    assert "## 简介\n\n这是视频简介" in markdown
+    assert "| 播放 | 325806 |" in markdown
+    assert "- NBA" in markdown
+    assert "推荐视频" not in markdown
+
+
+def test_high_confidence_specialized_extractor_can_replace_longer_generic_body():
+    result = WebExtractorResult(name="bilibili-video", body="## 视频信息\n\n- 标题：第一条视频", score=920)
+
+    assert should_use_specialized_result(result, "推荐视频\n" * 100, rendered=False)
 
 
 def test_discourse_topic_markdown_extracts_posts_without_shell_noise():

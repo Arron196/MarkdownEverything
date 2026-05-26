@@ -193,9 +193,11 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         metadata={"candidate": candidate.name, "candidate_score": candidate.score},
     )
     specialized_result = run_specialized_extractors(extractor_context)
-    if specialized_result and (rendered_page is not None or len(specialized_result.body) > len(body)):
+    extractor_score = candidate.score
+    if specialized_result and should_use_specialized_result(specialized_result, body, rendered_page is not None):
         body = specialized_result.body
         extractor_name = specialized_result.name
+        extractor_score = specialized_result.score
 
     if specialized_result is None and (
         not meaningful_body(body) or should_use_snapshot_body(candidate, body, rendered_page is not None)
@@ -204,6 +206,7 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         if snapshot_result:
             body = snapshot_result.body
             extractor_name = snapshot_result.name
+            extractor_score = snapshot_result.score
 
     restriction_message = access_restriction_message(body, title)
     if restriction_message:
@@ -218,8 +221,16 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         author=author,
         created_at=created_at,
         resources=resources,
-        metadata={"extractor": extractor_name, "extractor_score": round(candidate.score, 2)},
+        metadata={"extractor": extractor_name, "extractor_score": round(extractor_score, 2)},
     )
+
+
+def should_use_specialized_result(result, current_body: str, rendered: bool) -> bool:
+    if rendered:
+        return True
+    if result.score >= 900:
+        return True
+    return len(result.body) > len(current_body)
 
 
 async def fetch_html(url: str) -> tuple[str, str]:
