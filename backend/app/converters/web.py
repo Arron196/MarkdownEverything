@@ -1,5 +1,7 @@
+import asyncio
 import mimetypes
 import re
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +129,14 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         html, final_url = await fetch_html(url)
     except httpx.HTTPStatusError as exc:
         if not should_render_after_fetch_error(exc):
+            raise
+        rendered_page = await render_page(url)
+        if not rendered_page:
+            raise
+        html = rendered_page.html
+        final_url = rendered_page.final_url
+    except httpx.RequestError as exc:
+        if not should_render_after_request_error(exc):
             raise
         rendered_page = await render_page(url)
         if not rendered_page:
@@ -316,11 +326,15 @@ def should_render_fallback(candidate: ContentCandidate) -> bool:
         return True
     if candidate.name == "body-fallback" and candidate.score <= 0:
         return True
+    if is_challenge_or_js_disabled_text(visible_text(candidate.node)):
+        return True
     return False
 
 
 def should_use_snapshot_body(candidate: ContentCandidate, body: str, was_rendered: bool) -> bool:
     if candidate.name in {"body-fallback"}:
+        return True
+    if is_challenge_or_js_disabled_text(body):
         return True
     if not was_rendered:
         return False
@@ -331,10 +345,43 @@ def should_use_snapshot_body(candidate: ContentCandidate, body: str, was_rendere
     return False
 
 
+def is_challenge_or_js_disabled_text(text: str) -> bool:
+    lowered = normalize_text(text).lower()
+    patterns = [
+        "javascript is disabled",
+        "javascript 不可用",
+        "please enable javascript",
+        "enable javascript",
+        "checking your browser",
+        "正在检查您的浏览器",
+        "client challenge",
+        "just a moment",
+        "请启用 javascript",
+        "request has been blocked",
+    ]
+    return any(pattern in lowered for pattern in patterns)
+
+
 def should_render_after_fetch_error(exc: httpx.HTTPStatusError) -> bool:
     if not settings.web_render_enabled or async_playwright is None:
         return False
-    return exc.response.status_code in {401, 403, 406, 409, 429, 503}
+    return exc.response.status_code in {401, 402, 403, 406, 408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def should_render_after_request_error(exc: httpx.RequestError) -> bool:
+    if not settings.web_render_enabled or async_playwright is None:
+        return False
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadError,
+            httpx.ReadTimeout,
+            httpx.RemoteProtocolError,
+            httpx.TransportError,
+        ),
+    )
 
 
 async def render_page(url: str) -> RenderedPage | None:
@@ -353,47 +400,70 @@ async def render_page(url: str) -> RenderedPage | None:
                     "--disable-setuid-sandbox",
                 ],
             )
-            context = await browser.new_context(
-                user_agent=FETCH_HEADERS["User-Agent"],
-                locale="zh-CN",
-                viewport={"width": 1366, "height": 900},
-                ignore_https_errors=False,
-            )
-            page = await context.new_page()
-
-            async def guard_request(route):
-                request_url = route.request.url
-                resource_type = route.request.resource_type
-                if resource_type in {"media", "font"}:
-                    await route.abort()
-                    return
-                try:
-                    assert_public_url(request_url)
-                except Exception:
-                    await route.abort()
-                    return
-                await route.continue_()
-
-            await page.route("**/*", guard_request)
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            if response and response.status >= 400:
-                await context.close()
-                await browser.close()
-                return None
             try:
-                await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 5000))
-            except Exception:
-                pass
-            await page.wait_for_timeout(settings.web_render_wait_ms)
-            final_url = page.url
-            assert_public_url(final_url)
-            title = await page.title()
-            html = await page.content()
-            await context.close()
-            await browser.close()
-            return RenderedPage(html=html, title=title, final_url=final_url)
+                context = await browser.new_context(
+                    user_agent=FETCH_HEADERS["User-Agent"],
+                    locale="zh-CN",
+                    viewport={"width": 1366, "height": 900},
+                    ignore_https_errors=settings.web_render_ignore_https_errors,
+                )
+                try:
+                    page = await context.new_page()
+                    checked_hosts: dict[tuple[str, str | None], bool] = {}
+
+                    async def guard_request(route):
+                        request_url = route.request.url
+                        resource_type = route.request.resource_type
+                        if resource_type in {"image", "media", "font"}:
+                            with suppress(Exception):
+                                await route.abort()
+                            return
+                        parsed = urlparse(request_url)
+                        cache_key = (parsed.scheme, parsed.hostname)
+                        try:
+                            if cache_key not in checked_hosts:
+                                assert_public_url(request_url)
+                                checked_hosts[cache_key] = True
+                        except Exception:
+                            with suppress(Exception):
+                                await route.abort()
+                            return
+                        with suppress(Exception):
+                            await route.continue_()
+
+                    await page.route("**/*", guard_request)
+                    await goto_with_partial_dom(page, url, timeout_ms)
+                    with suppress(Exception):
+                        await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 2000))
+                    await page.wait_for_timeout(settings.web_render_wait_ms)
+                    for _ in range(max(settings.web_render_scroll_steps, 0)):
+                        with suppress(Exception):
+                            await page.evaluate("window.scrollBy(0, Math.max(document.documentElement.clientHeight, 800))")
+                        await page.wait_for_timeout(350)
+                    final_url = page.url
+                    assert_public_url(final_url)
+                    title = await page.title()
+                    html = await page.content()
+                    if len(visible_text(BeautifulSoup(html, "html.parser"))) < 2:
+                        return None
+                    return RenderedPage(html=html, title=title, final_url=final_url)
+                finally:
+                    await context.close()
+            finally:
+                await browser.close()
     except Exception:
         return None
+
+
+async def goto_with_partial_dom(page, url: str, timeout_ms: int) -> None:
+    try:
+        await page.goto(url, wait_until="commit", timeout=timeout_ms)
+    except Exception:
+        with suppress(Exception):
+            await page.wait_for_timeout(250)
+        return
+    with suppress(Exception):
+        await page.wait_for_load_state("domcontentloaded", timeout=min(timeout_ms, 3500))
 
 
 def select_content_candidate(html: str, soup: BeautifulSoup, base_url: str | None = None) -> ContentCandidate:
@@ -604,53 +674,94 @@ def meaningful_body(body: str) -> bool:
 
 
 async def download_images(soup: BeautifulSoup, base_url: str, assets_dir: Path) -> list[str]:
-    resources: list[str] = []
-    downloaded_by_url: dict[str, str] = {}
-    downloaded = 0
+    image_items: list[tuple[object, str]] = []
+    images_by_url: dict[str, list[object]] = {}
+    seen: set[str] = set()
     assets_dir.mkdir(parents=True, exist_ok=True)
 
+    for img in soup.find_all("img"):
+        if len(image_items) >= settings.max_images_per_job:
+            break
+        image_url = extract_image_source(img, base_url)
+        if not image_url or is_placeholder_image(img, image_url):
+            img.decompose()
+            continue
+        images_by_url.setdefault(image_url, []).append(img)
+        if image_url in seen:
+            continue
+        seen.add(image_url)
+        image_items.append((img, image_url))
+
+    if not image_items:
+        return []
+
+    timeout = httpx.Timeout(settings.web_image_download_timeout_seconds, connect=min(settings.web_image_download_timeout_seconds, 2))
+    limits = httpx.Limits(max_connections=max(settings.web_image_download_concurrency, 1))
     async with httpx.AsyncClient(
-        timeout=settings.request_timeout_seconds,
+        timeout=timeout,
         follow_redirects=True,
         max_redirects=2,
         headers=FETCH_HEADERS,
+        limits=limits,
     ) as client:
-        for img in soup.find_all("img"):
-            if downloaded >= settings.max_images_per_job:
-                break
-            image_url = extract_image_source(img, base_url)
-            if not image_url or is_placeholder_image(img, image_url):
-                img.decompose()
-                continue
+        tasks = [fetch_image_asset(client, image_url) for _, image_url in image_items]
+        fetched = await gather_with_budget(tasks, settings.web_image_download_budget_seconds)
 
-            if image_url in downloaded_by_url:
-                img["src"] = downloaded_by_url[image_url]
-                continue
+    resources: list[str] = []
+    downloaded_by_url: dict[str, str] = {}
+    downloaded = 0
+    for (img, image_url), result in zip(image_items, fetched):
+        if isinstance(result, Exception) or not result:
+            continue
+        content_type, content = result
+        if not content_type.startswith("image/") or len(content) > MAX_IMAGE_BYTES:
+            continue
+        try:
+            extension = image_extension(content_type, image_url)
+            downloaded += 1
+            filename = f"image-{downloaded}{extension}"
+            local_src = f"./assets/{filename}"
+            (assets_dir / filename).write_bytes(content)
+            downloaded_by_url[image_url] = local_src
+            alt_text = normalize_text(img.get("alt", ""))
+            suffix = f"（{alt_text}）" if alt_text else ""
+            resources.append(f"- 图片资源：{local_src}{suffix}")
+        except Exception:
+            continue
 
-            try:
-                assert_public_url(image_url)
-                response = await client.get(image_url)
-                response.raise_for_status()
-                content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-                if not content_type.startswith("image/") or len(response.content) > MAX_IMAGE_BYTES:
-                    img["src"] = image_url
-                    continue
-
-                extension = image_extension(content_type, image_url)
-                downloaded += 1
-                filename = f"image-{downloaded}{extension}"
-                local_src = f"./assets/{filename}"
-                (assets_dir / filename).write_bytes(response.content)
-                img["src"] = local_src
-                downloaded_by_url[image_url] = local_src
-                alt_text = normalize_text(img.get("alt", ""))
-                suffix = f"（{alt_text}）" if alt_text else ""
-                resources.append(f"- 图片资源：{local_src}{suffix}")
-            except Exception:
-                img["src"] = image_url
-                continue
-
+    rewrite_image_sources(images_by_url, downloaded_by_url)
     return resources
+
+
+async def fetch_image_asset(client: httpx.AsyncClient, image_url: str) -> tuple[str, bytes] | None:
+    try:
+        assert_public_url(image_url)
+        response = await client.get(image_url)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+        if len(response.content) > MAX_IMAGE_BYTES:
+            return None
+        return content_type, response.content
+    except Exception:
+        return None
+
+
+async def gather_with_budget(tasks, timeout_seconds: float) -> list:
+    gather_future = asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        return await asyncio.wait_for(gather_future, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        gather_future.cancel()
+        with suppress(asyncio.CancelledError):
+            await gather_future
+        return [None] * len(tasks)
+
+
+def rewrite_image_sources(images_by_url: dict[str, list[object]], downloaded_by_url: dict[str, str]) -> None:
+    for image_url, images in images_by_url.items():
+        src = downloaded_by_url.get(image_url, image_url)
+        for img in images:
+            img["src"] = src
 
 
 def image_extension(content_type: str, image_url: str) -> str:

@@ -1,8 +1,12 @@
+import asyncio
 import re
 
+import httpx
 from bs4 import BeautifulSoup
 
 import app.converters.web_extractors.registry as extractor_registry
+import app.converters.web as web_converter
+from app.converters.base import ConversionResult
 from app.converters.web import select_content_candidate
 from app.converters.web_extractors.base import WebExtractorContext, WebExtractorResult
 from app.converters.web_extractors.discourse import discourse_topic_markdown
@@ -181,6 +185,79 @@ def test_page_snapshot_outputs_controls_visible_text_and_compact_links():
     assert "[图片](https://example.com/images)" in markdown
     assert "[1 热点新闻](https://example.com/search?q=%E7%83%AD%E7%82%B9)" in markdown
     assert "[羽扇豆](https://example.com/th?id=hero)" in markdown
+
+
+def test_page_snapshot_outputs_metadata_lists_tables_and_media():
+    html = """
+    <html>
+      <head>
+        <title>Example Product</title>
+        <meta property="og:site_name" content="Example">
+        <script type="application/ld+json">
+          {"@type":"Product","name":"Markdown Engine","author":{"name":"ME Team"}}
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Markdown Engine</h1>
+          <ul><li>抓取网页</li><li>清洗内容</li><li>生成 Markdown</li></ul>
+          <table>
+            <tr><th>能力</th><th>状态</th></tr>
+            <tr><td>表格</td><td>保留</td></tr>
+          </table>
+          <video src="/demo.mp4" title="产品演示"></video>
+        </main>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    snapshot = build_page_snapshot(soup, "https://example.com/product", "Example Product")
+    markdown = render_page_snapshot_markdown(snapshot)
+
+    assert "## 元数据" in markdown
+    assert "- og:site_name: Example" in markdown
+    assert "- jsonld:type: Product" in markdown
+    assert "- jsonld:name: Markdown Engine" in markdown
+    assert "## 列表" in markdown
+    assert "- 抓取网页" in markdown
+    assert "## 表格" in markdown
+    assert "| 能力 | 状态 |" in markdown
+    assert "| 表格 | 保留 |" in markdown
+    assert "## 媒体" in markdown
+    assert "[产品演示](https://example.com/demo.mp4)" in markdown
+
+
+def test_convert_webpage_renders_after_static_request_error(monkeypatch, tmp_path):
+    async def fake_fetch_html(_url):
+        request = httpx.Request("GET", "https://example.com/app")
+        raise httpx.ConnectError("network reset", request=request)
+
+    async def fake_render_page(_url):
+        return web_converter.RenderedPage(
+            html="""
+            <html>
+              <head><title>Rendered App</title></head>
+              <body><main><h1>Rendered App</h1><p>浏览器渲染后出现的主要内容，足够长，适合 MarkdownEverything 继续转换。</p></main></body>
+            </html>
+            """,
+            title="Rendered App",
+            final_url="https://example.com/app",
+        )
+
+    async def fake_download_images(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(web_converter, "async_playwright", object())
+    monkeypatch.setattr(web_converter, "fetch_html", fake_fetch_html)
+    monkeypatch.setattr(web_converter, "render_page", fake_render_page)
+    monkeypatch.setattr(web_converter, "download_images", fake_download_images)
+
+    result = asyncio.run(web_converter.convert_webpage("https://example.com/app", tmp_path / "assets"))
+
+    assert isinstance(result, ConversionResult)
+    assert result.title == "Rendered App"
+    assert result.source_url == "https://example.com/app"
+    assert "浏览器渲染后出现的主要内容" in result.body
 
 
 def test_discourse_topic_markdown_extracts_posts_without_shell_noise():

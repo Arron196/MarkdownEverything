@@ -16,3 +16,4 @@ data/
 markdown_everything.db
 *.log
 *.tsbuildinfo
+backend/benchmarks/results/

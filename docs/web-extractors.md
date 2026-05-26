@@ -7,7 +7,36 @@ The core converter still handles fetching, SSRF checks, browser rendering, gener
 ## Built-In Extractors
 
 - `discourse.py`: extracts Discourse forum topics into topic metadata, post index, and per-post Markdown.
-- `snapshot.py`: fallback for dynamic app/home/search pages. It outputs page description, visible headings, controls, text blocks, links, and images.
+- `snapshot.py`: fallback for dynamic app/home/search pages. It outputs page description, metadata, visible headings, controls, text blocks, lists, tables, links, images, and media URLs.
+
+## Compatibility Benchmark
+
+The repository includes a broad webpage benchmark corpus in `backend/benchmarks/web_100_sites.yml`. It currently covers 102 URLs across search, documentation, encyclopedia, news, blogs, repositories, package registries, forums, Q&A, social, video, ecommerce, product, marketing, education, government, finance, data, map, travel, design, and reference sites.
+
+Run a quick smoke test:
+
+```powershell
+cd backend
+$env:PYTHONIOENCODING="utf-8"
+python benchmarks\run_web_compat.py --limit 10 --timeout 35 --concurrency 2
+```
+
+Run the full corpus:
+
+```powershell
+cd backend
+$env:PYTHONIOENCODING="utf-8"
+python benchmarks\run_web_compat.py --timeout 45 --concurrency 4 --retry-failed --retry-timeout 60 --retry-concurrency 1
+```
+
+The benchmark prints one line per completed site and continuously writes:
+
+- `backend/benchmarks/results/web_compat_latest.json`
+- `backend/benchmarks/results/web_compat_latest.md`
+
+Benchmark results are intentionally ignored by git. Use them as a local quality gate and as a failure list when adding new extractors.
+
+Failed pages are classified with reasons such as `network_or_timeout`, `login_or_blocked`, `challenge_or_js_required`, and `empty_or_blocked_response`. This keeps the product boundary clear: MarkdownEverything improves extraction and public-page compatibility, but it does not bypass login walls, paywalls, bot challenges, DRM, or private access controls.
 
 ## Add A New Extractor
 

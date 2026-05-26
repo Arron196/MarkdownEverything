@@ -1,0 +1,205 @@
+sites:
+  - category: search
+    url: https://cn.bing.com/
+  - category: search
+    url: https://www.google.com/
+  - category: search
+    url: https://duckduckgo.com/
+  - category: docs
+    url: https://docs.trytrellis.app/zh/start/install-and-first-task
+  - category: docs
+    url: https://docs.python.org/3/tutorial/index.html
+  - category: docs
+    url: https://developer.mozilla.org/en-US/docs/Web/JavaScript
+  - category: docs
+    url: https://fastapi.tiangolo.com/
+  - category: docs
+    url: https://docs.djangoproject.com/en/stable/
+  - category: docs
+    url: https://nextjs.org/docs
+  - category: docs
+    url: https://react.dev/learn
+  - category: docs
+    url: https://vuejs.org/guide/introduction.html
+  - category: docs
+    url: https://tailwindcss.com/docs/installation
+  - category: docs
+    url: https://www.postgresql.org/docs/current/tutorial.html
+  - category: docs
+    url: https://redis.io/docs/latest/
+  - category: docs
+    url: https://docs.docker.com/get-started/
+  - category: docs
+    url: https://kubernetes.io/docs/home/
+  - category: docs
+    url: https://docs.github.com/en/actions
+  - category: docs
+    url: https://platform.openai.com/docs
+  - category: docs
+    url: https://docs.anthropic.com/
+  - category: docs
+    url: https://docs.stripe.com/
+  - category: docs
+    url: https://www.cloudflare.com/learning/
+  - category: docs
+    url: https://help.figma.com/hc/en-us
+  - category: docs
+    url: https://obsidian.md/help
+  - category: docs
+    url: https://help.notion.com/
+  - category: encyclopedia
+    url: https://en.wikipedia.org/wiki/Markdown
+  - category: encyclopedia
+    url: https://zh.wikipedia.org/wiki/Markdown
+  - category: encyclopedia
+    url: https://www.britannica.com/science/artificial-intelligence
+  - category: news
+    url: https://www.bbc.com/news
+  - category: news
+    url: https://www.theguardian.com/international
+  - category: news
+    url: https://www.nytimes.com/
+  - category: news
+    url: https://www.reuters.com/
+  - category: news
+    url: https://apnews.com/
+  - category: news
+    url: https://www.cnn.com/
+  - category: news
+    url: https://www.npr.org/
+  - category: news
+    url: https://www.technologyreview.com/
+  - category: news
+    url: https://www.theverge.com/
+  - category: news
+    url: https://arstechnica.com/
+  - category: news
+    url: https://techcrunch.com/
+  - category: news
+    url: https://www.wired.com/
+  - category: news
+    url: https://www.36kr.com/
+  - category: news
+    url: https://www.huxiu.com/
+  - category: news
+    url: https://www.ifanr.com/
+  - category: blog
+    url: https://martinfowler.com/articles/microservices.html
+  - category: blog
+    url: https://paulgraham.com/articles.html
+  - category: blog
+    url: https://www.joelonsoftware.com/
+  - category: blog
+    url: https://stratechery.com/
+  - category: blog
+    url: https://www.ben-evans.com/
+  - category: blog
+    url: https://lilianweng.github.io/
+  - category: blog
+    url: https://openai.com/news/
+  - category: blog
+    url: https://www.anthropic.com/news
+  - category: blog
+    url: https://blog.google/technology/ai/
+  - category: blog
+    url: https://engineering.fb.com/
+  - category: blog
+    url: https://netflixtechblog.com/
+  - category: blog
+    url: https://github.blog/
+  - category: repo
+    url: https://github.com/python/cpython
+  - category: repo
+    url: https://github.com/vercel/next.js
+  - category: repo
+    url: https://github.com/facebook/react
+  - category: repo
+    url: https://gitlab.com/gitlab-org/gitlab
+  - category: package
+    url: https://www.npmjs.com/package/next
+  - category: package
+    url: https://pypi.org/project/fastapi/
+  - category: package
+    url: https://crates.io/crates/serde
+  - category: forum
+    url: https://linux.do/t/topic/2087294
+  - category: forum
+    url: https://news.ycombinator.com/
+  - category: forum
+    url: https://lobste.rs/
+  - category: qna
+    url: https://stackoverflow.com/questions/tagged/python
+  - category: qna
+    url: https://serverfault.com/questions
+  - category: qna
+    url: https://superuser.com/questions
+  - category: social
+    url: https://www.reddit.com/r/programming/
+  - category: social
+    url: https://x.com/
+  - category: social
+    url: https://www.linkedin.com/
+  - category: video
+    url: https://www.youtube.com/
+  - category: video
+    url: https://www.bilibili.com/
+  - category: video
+    url: https://www.ted.com/talks
+  - category: ecommerce
+    url: https://www.amazon.com/
+  - category: ecommerce
+    url: https://www.ebay.com/
+  - category: ecommerce
+    url: https://www.etsy.com/
+  - category: product
+    url: https://www.apple.com/iphone/
+  - category: product
+    url: https://www.microsoft.com/en-us/microsoft-365
+  - category: product
+    url: https://www.tesla.com/model3
+  - category: marketing
+    url: https://www.figma.com/
+  - category: marketing
+    url: https://www.notion.com/
+  - category: marketing
+    url: https://slack.com/
+  - category: marketing
+    url: https://linear.app/
+  - category: marketing
+    url: https://www.datadoghq.com/
+  - category: education
+    url: https://www.coursera.org/
+  - category: education
+    url: https://www.khanacademy.org/
+  - category: education
+    url: https://ocw.mit.edu/
+  - category: government
+    url: https://www.usa.gov/
+  - category: government
+    url: https://www.gov.uk/
+  - category: government
+    url: https://www.nasa.gov/
+  - category: finance
+    url: https://finance.yahoo.com/
+  - category: finance
+    url: https://www.investopedia.com/
+  - category: data
+    url: https://www.kaggle.com/
+  - category: data
+    url: https://huggingface.co/models
+  - category: map
+    url: https://www.openstreetmap.org/
+  - category: travel
+    url: https://www.booking.com/
+  - category: travel
+    url: https://www.airbnb.com/
+  - category: design
+    url: https://dribbble.com/
+  - category: design
+    url: https://www.behance.net/
+  - category: reference
+    url: https://www.imdb.com/
+  - category: reference
+    url: https://www.goodreads.com/
+  - category: reference
+    url: https://www.producthunt.com/

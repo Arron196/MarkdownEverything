@@ -48,7 +48,7 @@ AI summaries need `AI_API_KEY`. Without it, the app uses an extractive fallback 
 
 Site-specific webpage support is modular. Add extractors under `backend/app/converters/web_extractors/` and register them in `registry.py`.
 
-See `docs/web-extractors.md` for the extractor contract and contribution guidelines.
+See `docs/web-extractors.md` for the extractor contract, contribution guidelines, and the 102-site webpage compatibility benchmark.
 
 For local development without Redis workers, set:
 
