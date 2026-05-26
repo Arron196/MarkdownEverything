@@ -8,6 +8,7 @@ The core converter still handles fetching, SSRF checks, browser rendering, gener
 
 - `bilibili.py`: extracts the Bilibili homepage recommendation feed into a clean video table, and extracts Bilibili video detail pages into video metadata, author, stats, description, tags, cover, and source link.
 - `discourse.py`: extracts Discourse forum topics into topic metadata, post index, and per-post Markdown.
+- `nodeseek.py`: extracts NodeSeek forum posts into topic metadata, floor index, and per-floor Markdown without sidebar, login, and forum navigation noise.
 - `snapshot.py`: fallback for dynamic app/home/search pages. It outputs page description, metadata, visible headings, controls, text blocks, lists, tables, links, images, and media URLs.
 
 ## Compatibility Benchmark

@@ -17,6 +17,7 @@ from app.converters.web_extractors.bilibili import (
     render_bilibili_video_markdown,
 )
 from app.converters.web_extractors.discourse import discourse_topic_markdown
+from app.converters.web_extractors.nodeseek import nodeseek_post_markdown
 from app.converters.web_extractors.registry import run_specialized_extractors
 from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
 from app.converters.web_extractors.utils import (
@@ -438,6 +439,80 @@ def test_discourse_topic_markdown_extracts_posts_without_shell_noise():
     assert "codeblock-button-wrapper" not in markdown
     assert "话题 近期活动" not in markdown
     assert "## #2 bob" in markdown
+
+
+def test_nodeseek_post_markdown_extracts_thread_posts_without_sidebar_noise():
+    html = """
+    <html>
+      <head><title>甲骨文终于申请成功了</title></head>
+      <body>
+        <aside>
+          <h4>所有版块</h4>
+          <a href="/categories/daily">日常</a>
+          <a href="/lucky">幸运抽奖</a>
+        </aside>
+        <div class="nsk-post-wrapper">
+          <div class="nsk-post">
+            <div class="post-title"><a class="post-title-link" href="/post-748049-1">甲骨文终于申请成功了</a></div>
+            <div class="content-item" id="0">
+              <div class="nsk-content-meta-info">
+                <a class="author-name" href="/space/32635">dozeee</a>
+                <span class="is-poster role-tag">楼主</span>
+                <div class="content-info">1h 52min ago <span class="content-category">in <a href="/categories/daily">日常</a></span></div>
+                <a class="floor-link" href="#0">#0</a>
+              </div>
+              <article class="post-content"><p>刚才刷到别人开机经验贴，我试了下也成功了。<img src="/static/image/sticker/xhj/006.png" alt="xhj006"></p></article>
+              <div class="comment-menu">0 0 0 1</div>
+            </div>
+            <ul class="comments">
+              <li class="content-item" id="1">
+                <div class="nsk-content-meta-info">
+                  <a class="author-name" href="/space/38902">lotfree</a>
+                  <div class="content-info">1h 51min ago</div>
+                  <a class="floor-link" href="#1">#1</a>
+                </div>
+                <article class="post-content"><p>恭喜，是用的哪家宽带？</p></article>
+                <div class="comment-menu">0 0 0</div>
+              </li>
+              <li class="content-item" id="4">
+                <div class="nsk-content-meta-info">
+                  <a class="author-name" href="/space/32635">dozeee</a>
+                  <span class="is-poster role-tag">楼主</span>
+                  <div class="content-info">1h 49min ago</div>
+                  <a class="floor-link" href="#4">#4</a>
+                </div>
+                <article class="post-content">
+                  <p><a href="/member?t=lotfree">@lotfree</a> <a href="/post-748049-1#1">#1</a> 深圳家里联通宽带</p>
+                </article>
+                <div class="comment-menu">0 1 0</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <section>你好啊，陌生人! 登录 注册 快捷功能区 用户数目</section>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    markdown = nodeseek_post_markdown(soup, "https://www.nodeseek.com/post-748049-1", "甲骨文终于申请成功了")
+
+    assert markdown is not None
+    assert "## 主题信息" in markdown
+    assert "- 标题：甲骨文终于申请成功了" in markdown
+    assert "- 楼主：dozeee" in markdown
+    assert "- 版块：日常" in markdown
+    assert "## 楼层目录" in markdown
+    assert "- #0 dozeee" in markdown
+    assert "- #1 lotfree" in markdown
+    assert "- #4 dozeee" in markdown
+    assert "## #0 dozeee" in markdown
+    assert "刚才刷到别人开机经验贴" in markdown
+    assert "![xhj006](https://www.nodeseek.com/static/image/sticker/xhj/006.png)" in markdown
+    assert "## #4 dozeee" in markdown
+    assert "[@lotfree](https://www.nodeseek.com/member?t=lotfree)" in markdown
+    assert "所有版块" not in markdown
+    assert "快捷功能区" not in markdown
+    assert "comment-menu" not in markdown
 
 
 def test_specialized_extractor_registry_selects_highest_scoring_match(monkeypatch):
