@@ -17,6 +17,7 @@ from app.converters.web_extractors.bilibili import (
     render_bilibili_video_markdown,
 )
 from app.converters.web_extractors.discourse import discourse_topic_markdown
+from app.converters.web_extractors.github import extract_pull_request, render_pull_request_markdown
 from app.converters.web_extractors.nodeseek import nodeseek_post_markdown
 from app.converters.web_extractors.registry import run_specialized_extractors
 from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
@@ -402,6 +403,47 @@ def test_high_confidence_specialized_extractor_can_replace_longer_generic_body()
     assert should_use_specialized_result(result, "推荐视频\n" * 100, rendered=False)
 
 
+def test_convert_webpage_uses_specialized_extractor_title(monkeypatch, tmp_path):
+    async def fake_fetch_html(_url):
+        return (
+            """
+            <html>
+              <head>
+                <title>Search code, repositories, users, issues, pull requests...</title>
+                <meta property="og:title" content="fix(ops): bound memory growth by wucm667 · Pull Request #2752 · Wei-Shaw/sub2api">
+              </head>
+              <body>
+                <main>
+                  <div class="timeline-comment">
+                    <a class="author Link--primary" href="/wucm667">wucm667</a>
+                    <div class="comment-body markdown-body js-comment-body">
+                      <p>PR body with enough meaningful text to exercise the specialized GitHub extractor path.</p>
+                    </div>
+                  </div>
+                </main>
+              </body>
+            </html>
+            """,
+            "https://github.com/Wei-Shaw/sub2api/pull/2752",
+        )
+
+    async def fake_download_images(*_args, **_kwargs):
+        return []
+
+    async def fake_render_page(_url):
+        return None
+
+    monkeypatch.setattr(web_converter, "fetch_html", fake_fetch_html)
+    monkeypatch.setattr(web_converter, "download_images", fake_download_images)
+    monkeypatch.setattr(web_converter, "render_page", fake_render_page)
+
+    result = asyncio.run(web_converter.convert_webpage("https://github.com/Wei-Shaw/sub2api/pull/2752", tmp_path / "assets"))
+
+    assert result.title == "fix(ops): bound memory growth"
+    assert result.metadata["extractor"] == "github-pull-request"
+    assert "## Pull Request 信息" in result.body
+
+
 def test_discourse_topic_markdown_extracts_posts_without_shell_noise():
     html = """
     <html>
@@ -603,6 +645,51 @@ def test_wikipedia_extractor_supports_all_language_domains_and_variant_paths():
         assert result.name == "wikipedia-article"
         assert "Example Article" in result.body
         assert "History paragraph" in result.body
+
+
+def test_github_pull_request_markdown_extracts_pr_metadata_and_body_without_header_noise():
+    html = """
+    <html>
+      <head>
+        <title>Search code, repositories, users, issues, pull requests...</title>
+        <meta property="og:title" content="fix(ops): bound memory growth when db is unavailable by wucm667 · Pull Request #2752 · Wei-Shaw/sub2api">
+      </head>
+      <body>
+        <header>Navigation Menu Toggle navigation Sign in GitHub Copilot</header>
+        <div class="timeline-comment" id="pullrequest-1">
+          <div class="timeline-comment-header">
+            <a class="author Link--primary" href="/wucm667">wucm667</a>
+            <relative-time datetime="2026-05-25T10:00:00Z">May 25, 2026</relative-time>
+          </div>
+          <div class="comment-body markdown-body js-comment-body">
+            <h2>背景</h2>
+            <p>Issue <a href="/Wei-Shaw/sub2api/issues/2733">#2733</a> 记录了 Postgres 临时不可达。</p>
+            <h2>测试</h2>
+            <ul><li>go test ./...</li></ul>
+          </div>
+        </div>
+        <div class="TimelineItem">fix(ops): bound memory growth when db is unavailable b0ae967</div>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    pr = extract_pull_request(soup, "https://github.com/Wei-Shaw/sub2api/pull/2752")
+    markdown = render_pull_request_markdown(pr)
+
+    assert pr is not None
+    assert pr.owner == "Wei-Shaw"
+    assert pr.repo == "sub2api"
+    assert pr.number == "2752"
+    assert pr.title == "fix(ops): bound memory growth when db is unavailable"
+    assert pr.author == "wucm667"
+    assert "## Pull Request 信息" in markdown
+    assert "- 仓库：Wei-Shaw/sub2api" in markdown
+    assert "- PR：#2752" in markdown
+    assert "## PR 描述" in markdown
+    assert "[#2733](https://github.com/Wei-Shaw/sub2api/issues/2733)" in markdown
+    assert "## 页面可见提交" in markdown
+    assert "b0ae967" in markdown
+    assert "Navigation Menu" not in markdown
 
 
 def test_specialized_extractor_registry_selects_highest_scoring_match(monkeypatch):

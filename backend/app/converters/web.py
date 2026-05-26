@@ -198,6 +198,7 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         body = specialized_result.body
         extractor_name = specialized_result.name
         extractor_score = specialized_result.score
+        title = specialized_result.metadata.get("title") or title
 
     if specialized_result is None and (
         not meaningful_body(body) or should_use_snapshot_body(candidate, body, rendered_page is not None)
