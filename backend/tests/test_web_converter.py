@@ -10,6 +10,7 @@ import app.converters.web as web_converter
 from app.converters.base import ConversionResult
 from app.converters.web import select_content_candidate
 from app.converters.web_extractors.base import WebExtractorContext, WebExtractorResult
+from app.converters.web_extractors.bilibili import extract_home_videos, render_bilibili_home_markdown
 from app.converters.web_extractors.discourse import discourse_topic_markdown
 from app.converters.web_extractors.registry import run_specialized_extractors
 from app.converters.web_extractors.snapshot import build_page_snapshot, render_page_snapshot_markdown
@@ -281,6 +282,60 @@ def test_convert_webpage_rejects_access_restriction_response(monkeypatch, tmp_pa
 
     with pytest.raises(ValueError, match="access restriction"):
         asyncio.run(web_converter.convert_webpage("https://www.zhihu.com/question/2042235448982860479", tmp_path / "assets"))
+
+
+def test_bilibili_home_extractor_renders_video_table():
+    html = """
+    <html>
+      <body>
+        <nav>首页 番剧 直播 游戏中心 会员购</nav>
+        <div class="feed-card">
+          <div class="bili-video-card is-rcmd">
+            <a class="bili-video-card__image--link" href="https://www.bilibili.com/video/BV1aaa"></a>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">32.6万</span></span>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">886</span></span>
+            <span class="bili-video-card__stats__duration">07:26</span>
+            <h3 class="bili-video-card__info--tit" title="第一条视频"><a href="https://www.bilibili.com/video/BV1aaa">第一条视频</a></h3>
+            <span class="bili-video-card__info--author" title="作者A">作者A</span>
+            <span class="bili-video-card__info--date">· 昨天</span>
+          </div>
+        </div>
+        <div class="feed-card">
+          <div class="bili-video-card is-rcmd">
+            <a class="bili-video-card__image--link" href="//www.bilibili.com/video/BV1bbb"></a>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">9.2万</span></span>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">215</span></span>
+            <span class="bili-video-card__stats__duration">03:11</span>
+            <h3 class="bili-video-card__info--tit"><a href="//www.bilibili.com/video/BV1bbb">第二条 | 视频</a></h3>
+            <span class="bili-video-card__info--author">作者B</span>
+            <span class="bili-video-card__info--date">· 05-24</span>
+          </div>
+        </div>
+        <div class="feed-card">
+          <div class="bili-video-card is-rcmd">
+            <a class="bili-video-card__image--link" href="https://www.bilibili.com/video/BV1ccc"></a>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">1.2万</span></span>
+            <span class="bili-video-card__stats--item"><span class="bili-video-card__stats--text">66</span></span>
+            <span class="bili-video-card__stats__duration">01:00</span>
+            <h3 class="bili-video-card__info--tit"><a href="https://www.bilibili.com/video/BV1ccc">第三条视频</a></h3>
+            <span class="bili-video-card__info--author">作者C</span>
+            <span class="bili-video-card__info--date">· 05-23</span>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    videos = extract_home_videos(soup, "https://www.bilibili.com/")
+    markdown = render_bilibili_home_markdown(videos)
+
+    assert len(videos) == 3
+    assert "首页 番剧" not in markdown
+    assert "## 首页推荐视频" in markdown
+    assert "| 标题 | 作者 | 播放 | 互动 | 时长 | 日期 | 链接 |" in markdown
+    assert "| 第一条视频 | 作者A | 32.6万 | 886 | 07:26 | 昨天 | https://www.bilibili.com/video/BV1aaa |" in markdown
+    assert "第二条 \\| 视频" in markdown
+    assert "https://www.bilibili.com/video/BV1bbb" in markdown
 
 
 def test_discourse_topic_markdown_extracts_posts_without_shell_noise():

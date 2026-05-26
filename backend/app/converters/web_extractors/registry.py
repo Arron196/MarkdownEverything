@@ -1,12 +1,13 @@
 from collections.abc import Callable
 
-from app.converters.web_extractors import discourse
+from app.converters.web_extractors import bilibili, discourse
 from app.converters.web_extractors.base import WebExtractorContext, WebExtractorResult
 from app.converters.web_extractors.snapshot import extract as snapshot_extract
 
 Extractor = Callable[[WebExtractorContext], WebExtractorResult | None]
 
 SPECIALIZED_EXTRACTORS: list[Extractor] = [
+    bilibili.extract,
     discourse.extract,
 ]
 
