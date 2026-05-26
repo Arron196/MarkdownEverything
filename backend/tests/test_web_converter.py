@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from app.converters.web import (
     build_page_snapshot,
     clean_markdown,
+    discourse_topic_markdown,
     extract_image_source,
     markdown_from_node,
     normalize_links,
@@ -178,3 +179,44 @@ def test_page_snapshot_outputs_controls_visible_text_and_compact_links():
     assert "[图片](https://example.com/images)" in markdown
     assert "[1 热点新闻](https://example.com/search?q=%E7%83%AD%E7%82%B9)" in markdown
     assert "[羽扇豆](https://example.com/th?id=hero)" in markdown
+
+
+def test_discourse_topic_markdown_extracts_posts_without_shell_noise():
+    html = """
+    <html>
+      <head><title>Example Topic - Forum</title></head>
+      <body>
+        <nav>话题 近期活动 搜索 登录</nav>
+        <div id="topic-title"><h1>Example Topic</h1></div>
+        <article class="boxed onscreen-post" data-post-id="1" id="post_1">
+          <div class="topic-meta-data">
+            <span class="username"><a href="/u/alice">alice</a></span>
+            <a class="post-date" href="/t/example/1"><span class="relative-date" title="2026 年 5月 1 日 10:00">1 天</span></a>
+          </div>
+          <div class="cooked">
+            <p>第一楼正文，包含 <a href="/docs">文档链接</a>。</p>
+            <pre><div class="codeblock-button-wrapper"><button>copy</button></div><code>trellis init -u alice</code></pre>
+          </div>
+        </article>
+        <article class="boxed onscreen-post" data-post-id="2" id="post_2">
+          <div class="topic-meta-data">
+            <span class="username"><a href="/u/bob">bob</a></span>
+            <a class="post-date" href="/t/example/2"><span class="relative-date" title="2026 年 5月 1 日 10:05">1 天</span></a>
+          </div>
+          <div class="cooked"><p>第二楼回复。</p></div>
+        </article>
+      </body>
+    </html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    markdown = discourse_topic_markdown(soup, "https://forum.example/t/example", "Example Topic")
+
+    assert markdown is not None
+    assert "## 帖子目录" in markdown
+    assert "## #1 alice" in markdown
+    assert "发布时间：2026 年 5月 1 日 10:00" in markdown
+    assert "[文档链接](https://forum.example/docs)" in markdown
+    assert "trellis init -u alice" in markdown
+    assert "codeblock-button-wrapper" not in markdown
+    assert "话题 近期活动" not in markdown
+    assert "## #2 bob" in markdown
