@@ -132,6 +132,13 @@ async def run_one(site: dict, timeout_seconds: int) -> dict:
             "status": status,
             "title": result.title,
             "extractor": result.metadata.get("extractor"),
+            "extractor_score": result.metadata.get("extractor_score"),
+            "quality_status": result.metadata.get("quality_status"),
+            "quality_reasons": result.metadata.get("quality_reasons", []),
+            "candidate_count": result.metadata.get("candidate_count"),
+            "rendered": result.metadata.get("rendered"),
+            "winner_source": result.metadata.get("winner_source"),
+            "top_candidates": result.metadata.get("top_candidates", []),
             "source_url": result.source_url,
             "failure_reason": failure_reason,
             "duration_seconds": round(time.perf_counter() - started, 2),
@@ -224,7 +231,9 @@ def summarize(results: list[dict]) -> dict:
     ok = sum(1 for item in results if item.get("ok"))
     scores = [item.get("score", 0) for item in results]
     by_status = Counter(item.get("status", "unknown") for item in results)
+    by_quality = Counter(item.get("quality_status", "unknown") for item in results if item.get("ok"))
     by_extractor = Counter(item.get("extractor", "error") for item in results)
+    by_winner_source = Counter(item.get("winner_source", "error") for item in results if item.get("ok"))
     by_failure_reason = Counter(item.get("failure_reason") for item in results if item.get("failure_reason"))
     by_category = defaultdict(lambda: {"total": 0, "ok": 0})
     for item in results:
@@ -238,8 +247,11 @@ def summarize(results: list[dict]) -> dict:
         "success_rate": round(ok / total, 4) if total else 0,
         "average_score": round(mean(scores), 2) if scores else 0,
         "status_counts": dict(by_status),
+        "quality_counts": dict(by_quality),
         "extractor_counts": dict(by_extractor),
+        "winner_source_counts": dict(by_winner_source),
         "failure_reason_counts": dict(by_failure_reason),
+        "rendered_count": sum(1 for item in results if item.get("rendered")),
         "retry_successes": sum(1 for item in results if item.get("ok") and item.get("attempt", 1) > 1),
         "category_success": {
             key: {
@@ -266,22 +278,32 @@ def write_markdown_report(path: Path, summary: dict, results: list[dict]) -> Non
         "",
     ]
     lines.extend(f"- {key}: {value}" for key, value in summary["status_counts"].items())
+    if summary.get("quality_counts"):
+        lines.extend(["", "## Quality Counts", ""])
+        lines.extend(f"- {key}: {value}" for key, value in summary["quality_counts"].items())
     lines.extend(["", "## Extractors", ""])
     lines.extend(f"- {key}: {value}" for key, value in summary["extractor_counts"].items())
+    if summary.get("winner_source_counts"):
+        lines.extend(["", "## Winner Sources", ""])
+        lines.extend(f"- {key}: {value}" for key, value in summary["winner_source_counts"].items())
     if summary.get("failure_reason_counts"):
         lines.extend(["", "## Failure Reasons", ""])
         lines.extend(f"- {key}: {value}" for key, value in summary["failure_reason_counts"].items())
     lines.extend(["", "## Results", ""])
-    lines.append("| Status | Score | Attempt | Category | Extractor | URL | Reason | Error |")
-    lines.append("| --- | ---: | ---: | --- | --- | --- | --- | --- |")
+    lines.append("| Status | Quality | Score | Attempt | Category | Extractor | Source | Candidates | Rendered | URL | Reason | Error |")
+    lines.append("| --- | --- | ---: | ---: | --- | --- | --- | ---: | --- | --- | --- | --- |")
     for item in sorted(results, key=lambda value: (value.get("ok", False), value.get("score", 0))):
         lines.append(
-            "| {status} | {score} | {attempt} | {category} | {extractor} | {url} | {reason} | {error} |".format(
+            "| {status} | {quality} | {score} | {attempt} | {category} | {extractor} | {source} | {candidates} | {rendered} | {url} | {reason} | {error} |".format(
                 status=item.get("status", ""),
+                quality=item.get("quality_status", ""),
                 score=item.get("score", 0),
                 attempt=item.get("attempt", 1),
                 category=item.get("category", ""),
                 extractor=item.get("extractor", ""),
+                source=item.get("winner_source", ""),
+                candidates=item.get("candidate_count") or "",
+                rendered="yes" if item.get("rendered") else "",
                 url=item.get("url", ""),
                 reason=item.get("failure_reason") or "",
                 error=(item.get("error") or "").replace("|", "\\|"),
@@ -306,7 +328,8 @@ def progress_line(result: dict, index: int, total: int) -> str:
     marker = "OK" if result.get("ok") else "NO"
     return (
         f"[{index:03d}/{total:03d}] {marker} {result.get('status')} "
-        f"{result.get('score', 0):>6} {result.get('extractor') or '-'} {result['url']}"
+        f"{result.get('score', 0):>6} {result.get('quality_status') or '-'} "
+        f"{result.get('extractor') or '-'} {result['url']}"
     )
 
 

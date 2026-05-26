@@ -26,6 +26,18 @@ from app.converters.web_extractors.utils import (
     normalize_text,
     visible_text,
 )
+from app.converters.web_engine.analysis import analyze_page
+from app.converters.web_engine.candidates import (
+    generate_candidates as engine_generate_candidates,
+    snapshot_candidate as engine_snapshot_candidate,
+    specialized_candidate as engine_specialized_candidate,
+)
+from app.converters.web_engine.decision import (
+    select_winner as engine_select_winner,
+    should_render_static_page,
+    top_candidate_metadata,
+)
+from app.converters.web_engine.models import ExtractionCandidate
 from app.services.url_security import assert_public_url
 
 try:
@@ -125,6 +137,7 @@ class RenderedPage:
 
 async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
     rendered_page: RenderedPage | None = None
+    rendered_candidates_added = False
     try:
         html, final_url = await fetch_html(url)
     except httpx.HTTPStatusError as exc:
@@ -145,69 +158,52 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         final_url = rendered_page.final_url
 
     soup = BeautifulSoup(html, "html.parser")
-    title = extract_title(soup, final_url, rendered_page.title if rendered_page else None)
-    author = extract_author(soup)
-    created_at = extract_created_at(soup)
+    analysis = analyze_page(soup, final_url, rendered_page.title if rendered_page else None)
+    candidates = collect_engine_candidates(html, soup, analysis, rendered=rendered_page is not None)
+    maybe_add_snapshot_candidate(candidates, soup, analysis, rendered=rendered_page is not None)
+    best_static = engine_select_winner(candidates, analysis)
 
-    candidate = select_content_candidate(html, soup, final_url)
-
-    if rendered_page is None and should_render_fallback(candidate):
+    rendered_soup: BeautifulSoup | None = soup if rendered_page else None
+    rendered_analysis = analysis if rendered_page else None
+    if (
+        rendered_page is None
+        and not analysis.blocked_reason
+        and should_render_static_page(best_static, analysis, async_playwright is not None)
+    ):
         rendered_page = await render_page(final_url)
         if rendered_page:
+            rendered_candidates_added = True
             rendered_soup = BeautifulSoup(rendered_page.html, "html.parser")
-            rendered_candidate = select_content_candidate(rendered_page.html, rendered_soup, rendered_page.final_url)
-            if rendered_candidate.score > candidate.score or rendered_candidate.text_length > candidate.text_length:
-                html = rendered_page.html
-                soup = rendered_soup
-                final_url = rendered_page.final_url
-                candidate = rendered_candidate
-                title = extract_title(soup, final_url, rendered_page.title)
-                author = extract_author(soup) or author
-                created_at = extract_created_at(soup) or created_at
+            rendered_analysis = analyze_page(rendered_soup, rendered_page.final_url, rendered_page.title)
+            rendered_candidates = collect_engine_candidates(
+                rendered_page.html,
+                rendered_soup,
+                rendered_analysis,
+                rendered=True,
+            )
+            maybe_add_snapshot_candidate(rendered_candidates, rendered_soup, rendered_analysis, rendered=True)
+            candidates.extend(rendered_candidates)
 
-    content = candidate.node
-    normalize_links(content, final_url)
-    resources = await download_images(content, final_url, assets_dir)
+    winner = engine_select_winner(candidates, rendered_analysis or analysis)
+    if winner is None:
+        raise ValueError("Source page did not contain extractable public content")
 
-    body = markdown_from_node(content)
-    if not meaningful_body(body):
-        extracted = trafilatura.extract(
-            html,
-            url=final_url,
-            include_links=True,
-            include_tables=True,
-            include_images=True,
-            include_formatting=True,
-            output_format="markdown",
-            favor_recall=True,
-        )
-        body = extracted or body
+    winner_base_url = str(winner.metadata.get("base_url") or final_url)
+    winner_soup = rendered_soup if rendered_page and winner_base_url == rendered_page.final_url else soup
+    winner_analysis = rendered_analysis if rendered_page and winner_base_url == rendered_page.final_url else analysis
+    title = (winner.metadata.get("title") or winner_analysis.title or extract_title(winner_soup, winner_base_url)).strip()
+    author = extract_author(winner_soup)
+    created_at = extract_created_at(winner_soup)
 
-    body = clean_markdown(body, title)
-    extractor_name = candidate.name
-    extractor_context = WebExtractorContext(
-        soup=soup,
-        base_url=final_url,
-        title=title,
-        rendered=rendered_page is not None,
-        metadata={"candidate": candidate.name, "candidate_score": candidate.score},
-    )
-    specialized_result = run_specialized_extractors(extractor_context)
-    extractor_score = candidate.score
-    if specialized_result and should_use_specialized_result(specialized_result, body, rendered_page is not None):
-        body = specialized_result.body
-        extractor_name = specialized_result.name
-        extractor_score = specialized_result.score
-        title = specialized_result.metadata.get("title") or title
+    if winner_analysis.blocked_reason:
+        raise ValueError("Source site returned an access restriction or anti-bot challenge instead of public page content")
 
-    if specialized_result is None and (
-        not meaningful_body(body) or should_use_snapshot_body(candidate, body, rendered_page is not None)
-    ):
-        snapshot_result = SNAPSHOT_EXTRACTOR(extractor_context)
-        if snapshot_result:
-            body = snapshot_result.body
-            extractor_name = snapshot_result.name
-            extractor_score = snapshot_result.score
+    resources: list[str] = []
+    if winner.node is not None:
+        resources = await download_images(winner.node, winner_base_url, assets_dir)
+        body = clean_markdown(markdown_from_node(winner.node), title)
+    else:
+        body = clean_markdown(winner.markdown, title)
 
     restriction_message = access_restriction_message(body, title)
     if restriction_message:
@@ -222,7 +218,16 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
         author=author,
         created_at=created_at,
         resources=resources,
-        metadata={"extractor": extractor_name, "extractor_score": round(extractor_score, 2)},
+        metadata={
+            "extractor": winner.name,
+            "extractor_score": round(winner.score, 2),
+            "quality_status": winner.quality_status,
+            "quality_reasons": winner.quality_reasons,
+            "candidate_count": len([candidate for candidate in candidates if not candidate.hard_rejected]),
+            "rendered": rendered_page is not None or rendered_candidates_added,
+            "winner_source": winner.source,
+            "top_candidates": top_candidate_metadata(candidates),
+        },
     )
 
 
@@ -232,6 +237,45 @@ def should_use_specialized_result(result, current_body: str, rendered: bool) -> 
     if result.score >= 900:
         return True
     return len(result.body) > len(current_body)
+
+
+def collect_engine_candidates(
+    html: str,
+    soup: BeautifulSoup,
+    analysis,
+    rendered: bool = False,
+) -> list[ExtractionCandidate]:
+    candidates = engine_generate_candidates(html, soup, analysis)
+    extractor_context = WebExtractorContext(
+        soup=soup,
+        base_url=analysis.url,
+        title=analysis.title,
+        rendered=rendered,
+        metadata={"candidate_count": len(candidates)},
+    )
+    specialized_result = run_specialized_extractors(extractor_context)
+    if specialized_result:
+        candidate = engine_specialized_candidate(specialized_result, analysis)
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def maybe_add_snapshot_candidate(
+    candidates: list[ExtractionCandidate],
+    soup: BeautifulSoup,
+    analysis,
+    rendered: bool = False,
+) -> None:
+    best = engine_select_winner(candidates, analysis)
+    if best and best.quality_status == "strong" and analysis.page_kind == "article":
+        return
+    if best and best.source == "specialized" and best.source_score >= 900:
+        return
+    if analysis.page_kind in {"home", "search", "list"} or not best or best.quality_status in {"weak", "blocked"}:
+        snapshot = engine_snapshot_candidate(soup, analysis, rendered=rendered)
+        if snapshot:
+            candidates.append(snapshot)
 
 
 async def fetch_html(url: str) -> tuple[str, str]:

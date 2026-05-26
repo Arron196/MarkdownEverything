@@ -17,7 +17,7 @@ def extract(context: WebExtractorContext) -> WebExtractorResult | None:
         name="wikipedia-article",
         body=body,
         score=930,
-        metadata={"length": len(body)},
+        metadata={"length": len(body), "title": wikipedia_title(context.soup, context.title)},
     )
 
 
@@ -132,10 +132,10 @@ def wikipedia_title(soup: BeautifulSoup, fallback_title: str) -> str:
     for selector in [".mw-page-title-main", "#firstHeading", "h1"]:
         node = soup.select_one(selector)
         if node:
-            text = normalize_text(node.get_text(" ", strip=True))
+            text = clean_wikipedia_title(node.get_text(" ", strip=True))
             if text:
                 return text
-    return normalize_text(fallback_title)
+    return clean_wikipedia_title(fallback_title)
 
 
 def wikipedia_summary(markdown: str) -> str:
@@ -163,3 +163,9 @@ def clean_wikipedia_markdown(markdown: str, title: str) -> str:
     text = text.replace("↑", "")
     text = clean_markdown(text, title)
     return text.strip()
+
+
+def clean_wikipedia_title(value: str) -> str:
+    text = normalize_text(value)
+    text = text.replace("[ 编辑 ]", "").replace("[编辑]", "")
+    return normalize_text(text)
