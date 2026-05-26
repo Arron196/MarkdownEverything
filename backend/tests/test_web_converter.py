@@ -2,6 +2,7 @@ import asyncio
 import re
 
 import httpx
+import pytest
 from bs4 import BeautifulSoup
 
 import app.converters.web_extractors.registry as extractor_registry
@@ -258,6 +259,28 @@ def test_convert_webpage_renders_after_static_request_error(monkeypatch, tmp_pat
     assert result.title == "Rendered App"
     assert result.source_url == "https://example.com/app"
     assert "浏览器渲染后出现的主要内容" in result.body
+
+
+def test_convert_webpage_rejects_access_restriction_response(monkeypatch, tmp_path):
+    async def fake_fetch_html(_url):
+        return (
+            """
+            <html>
+              <head><title>www.zhihu.com</title></head>
+              <body>{"error":{"message":"您当前请求存在异常，暂时限制本次访问。如有疑问，您可以通过手机摇一摇或登录后私信知乎小管家反馈。","code":40362}}</body>
+            </html>
+            """,
+            "https://www.zhihu.com/question/2042235448982860479",
+        )
+
+    async def fake_download_images(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(web_converter, "fetch_html", fake_fetch_html)
+    monkeypatch.setattr(web_converter, "download_images", fake_download_images)
+
+    with pytest.raises(ValueError, match="access restriction"):
+        asyncio.run(web_converter.convert_webpage("https://www.zhihu.com/question/2042235448982860479", tmp_path / "assets"))
 
 
 def test_discourse_topic_markdown_extracts_posts_without_shell_noise():

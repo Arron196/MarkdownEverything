@@ -205,6 +205,10 @@ async def convert_webpage(url: str, assets_dir: Path) -> ConversionResult:
             body = snapshot_result.body
             extractor_name = snapshot_result.name
 
+    restriction_message = access_restriction_message(body, title)
+    if restriction_message:
+        raise ValueError(restriction_message)
+
     return ConversionResult(
         title=title.strip(),
         source_type="webpage",
@@ -360,6 +364,24 @@ def is_challenge_or_js_disabled_text(text: str) -> bool:
         "request has been blocked",
     ]
     return any(pattern in lowered for pattern in patterns)
+
+
+def access_restriction_message(body: str, title: str = "") -> str | None:
+    text = normalize_text(f"{title} {body}")
+    lowered = text.lower()
+    markers = [
+        "您当前请求存在异常",
+        "暂时限制本次访问",
+        "知乎小管家",
+        '"code":40362',
+        "access denied",
+        "request has been blocked",
+        "captcha",
+        "bot challenge",
+    ]
+    if len(text) <= 1800 and any(marker in lowered or marker in text for marker in markers):
+        return "Source site returned an access restriction or anti-bot challenge instead of public page content"
+    return None
 
 
 def should_render_after_fetch_error(exc: httpx.HTTPStatusError) -> bool:
