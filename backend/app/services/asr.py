@@ -75,22 +75,68 @@ def get_provider() -> AsrProvider:
 def normalize_transcript(payload: dict) -> tuple[list[dict[str, str]], str | None, str | None]:
     segments = payload.get("segments") or []
     timeline: list[dict[str, str]] = []
-    for index, segment in enumerate(segments, start=1):
-        timeline.append(
+    normalized_segments: list[dict[str, str]] = []
+    for segment in segments:
+        text = (segment.get("text") or "").strip()
+        if not text:
+            continue
+        normalized_segments.append(
             {
                 "start": seconds_to_timestamp(segment.get("start")),
                 "end": seconds_to_timestamp(segment.get("end")),
-                "title": f"片段 {index}",
-                "text": (segment.get("text") or "").strip(),
+                "text": text,
+            }
+        )
+    for index, segment in enumerate(merge_transcript_segments(normalized_segments), start=1):
+        timeline.append(
+            {
+                "start": segment["start"],
+                "end": segment["end"],
+                "title": segment_title(index, segment["text"]),
+                "text": segment["text"],
             }
         )
     if not timeline and payload.get("text"):
-        timeline.append({"start": "00:00", "end": seconds_to_timestamp(payload.get("duration")), "title": "转写", "text": payload["text"]})
+        timeline.append(
+            {
+                "start": "00:00",
+                "end": seconds_to_timestamp(payload.get("duration")),
+                "title": "完整转写",
+                "text": str(payload["text"]).strip(),
+            }
+        )
     duration = None
     if timeline:
         duration = timeline[-1]["end"]
     language = payload.get("language")
     return timeline, language, duration
+
+
+def merge_transcript_segments(segments: list[dict[str, str]], target_chars: int = 700) -> list[dict[str, str]]:
+    if not segments:
+        return []
+    merged: list[dict[str, str]] = []
+    current = {"start": segments[0]["start"], "end": segments[0]["end"], "text": segments[0]["text"]}
+    for segment in segments[1:]:
+        if len(current["text"]) < target_chars:
+            current["end"] = segment["end"]
+            current["text"] = normalize_transcript_text(current["text"] + " " + segment["text"])
+        else:
+            merged.append(current)
+            current = {"start": segment["start"], "end": segment["end"], "text": segment["text"]}
+    merged.append(current)
+    return merged
+
+
+def normalize_transcript_text(text: str) -> str:
+    return " ".join(text.split()).strip()
+
+
+def segment_title(index: int, text: str) -> str:
+    first_sentence = text.strip().split("。", 1)[0].split(".", 1)[0].strip()
+    if 4 <= len(first_sentence) <= 28:
+        return first_sentence
+    return f"片段 {index}"
 
 
 def probe_duration(media_path: Path) -> str | None:

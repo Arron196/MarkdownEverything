@@ -213,6 +213,21 @@ def get_markdown(job: Job = Depends(get_accessible_job)) -> MarkdownResponse:
     return MarkdownResponse(markdown=path.read_text(encoding="utf-8"))
 
 
+@router.get("/{job_id}/assets/{asset_path:path}")
+def get_job_asset(asset_path: str, job: Job = Depends(get_accessible_job)) -> FileResponse:
+    if job.status != JobStatus.succeeded or not job.assets_dir:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assets are not available yet")
+    assets_dir = Path(job.assets_dir).resolve()
+    path = (assets_dir / asset_path).resolve()
+    try:
+        path.relative_to(assets_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid asset path") from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file missing")
+    return FileResponse(path)
+
+
 @router.get("/{job_id}/download")
 def download_job(format: str = "zip", job: Job = Depends(get_accessible_job)) -> FileResponse:
     if job.status != JobStatus.succeeded:

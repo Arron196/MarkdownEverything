@@ -1,0 +1,32 @@
+samples:
+  - id: attention-is-all-you-need
+    url: https://arxiv.org/pdf/1706.03762
+    expected:
+      min_pages: 10
+      min_formulas: 5
+      min_inline_images: 2
+      title_contains: Attention
+  - id: gpt-4-technical-report
+    url: https://arxiv.org/pdf/2303.08774
+    expected:
+      min_pages: 80
+      min_formulas: 10
+      min_inline_images: 5
+      title_contains: GPT-4
+  - id: nist-digital-identity
+    url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-63b.pdf
+    expected:
+      min_pages: 70
+      min_inline_images: 10
+      title_contains: Digital Identity
+  - id: irs-w4-form
+    url: https://www.irs.gov/pub/irs-pdf/fw4.pdf
+    expected:
+      min_pages: 5
+      min_tables: 1
+      title_contains: W-4
+  - id: w3c-dummy
+    url: https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf
+    expected:
+      min_pages: 1
+      title_contains: dummy

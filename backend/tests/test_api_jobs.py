@@ -24,6 +24,12 @@ def test_create_text_job_to_markdown(tmp_path, monkeypatch):
         assert markdown_response.status_code == 200
         assert "Hello MarkdownEverything" in markdown_response.json()["markdown"]
 
+        asset = tmp_path / "jobs" / job_id / "assets" / "image.png"
+        asset.write_bytes(b"fake-image")
+        asset_response = client.get(f"/api/jobs/{job_id}/assets/image.png", params={"guest_token": guest_token})
+        assert asset_response.status_code == 200
+        assert asset_response.content == b"fake-image"
+
         download_response = client.get(f"/api/jobs/{job_id}/download", params={"guest_token": guest_token, "format": "zip"})
         assert download_response.status_code == 200
         assert download_response.headers["content-type"] == "application/zip"

@@ -75,6 +75,15 @@ export function downloadUrl(id: string, format: "md" | "zip") {
   return `${API_BASE}/jobs/${id}/download?${params.toString()}`;
 }
 
+export function assetUrl(id: string, markdownPath: string) {
+  const guest = getGuestToken(id);
+  const assetPath = markdownPath.replace(/^\.?\/?assets\//, "");
+  const params = new URLSearchParams();
+  if (guest) params.set("guest_token", guest);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return `${API_BASE}/jobs/${id}/assets/${assetPath.split("/").map(encodeURIComponent).join("/")}${suffix}`;
+}
+
 export async function deleteJob(id: string) {
   const guest = getGuestToken(id);
   const suffix = guest ? `?guest_token=${encodeURIComponent(guest)}` : "";

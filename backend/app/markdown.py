@@ -30,7 +30,7 @@ def render_document_markdown(
         "tags": [],
         "assets_dir": "./assets",
     }
-    resource_lines = resources or []
+    resource_lines = list(resources or [])
     if source_url:
         resource_lines.insert(0, f"- 原始链接：{source_url}")
     resources_md = "\n".join(resource_lines) if resource_lines else "- 图片资源：\n- 附件："
@@ -90,4 +90,3 @@ def render_media_markdown(
 
 {chr(10).join(timeline_blocks) if timeline_blocks else "未生成转写时间轴。"}
 """
-

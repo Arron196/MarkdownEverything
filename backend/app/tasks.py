@@ -14,6 +14,7 @@ from app.converters.web import convert_webpage
 from app.db import SessionLocal
 from app.markdown import render_document_markdown, render_media_markdown
 from app.models import Job, JobLog, JobStatus, SourceType
+from app.quality import score_conversion
 from app.services.ai import generate_summary
 from app.storage import append_job_log_file, ensure_job_dirs, remove_job_dir, write_result
 
@@ -77,6 +78,7 @@ def process_job(job_id: str) -> None:
             log(db, job, "info", "Conversion started")
             paths = ensure_job_dirs(job.id)
             result = run_conversion(job, paths)
+            result.metadata.update(score_conversion(result))
             set_progress(db, job, 70, "Content extracted")
 
             summary = run_async(generate_summary(result.summary_seed or result.body, result.title))
