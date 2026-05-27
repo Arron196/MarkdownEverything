@@ -1,11 +1,15 @@
 # MarkdownEverything
 
 <p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <img src="docs/readme-hero.png" alt="MarkdownEverything converts webpages, documents, audio, and video into clean Markdown" width="100%">
 </p>
 
 <p align="center">
-  <strong>Turn webpages, documents, text, audio, and video into clean, structured Markdown for AI systems and human knowledge bases.</strong>
+  <strong>Convert webpages, documents, text, audio, and video into clean Markdown you can read, archive, search, and pass to AI tools.</strong>
 </p>
 
 <p align="center">
@@ -24,11 +28,11 @@
   <img alt="Docker Compose" src="https://img.shields.io/badge/Docker%20Compose-Ready-2496ED?style=flat-square&logo=docker&logoColor=white">
 </p>
 
-MarkdownEverything is an open-source content ingestion layer for the AI era. It is not a thin file-format converter. It fetches, cleans, structures, stores, and packages content as Markdown that is useful for people, AI summarization, RAG retrieval, agent tools, Obsidian-style archives, and future MCP integrations.
+MarkdownEverything is an open-source service for turning messy source material into usable Markdown. It fetches content, extracts the useful parts, keeps source metadata, saves related assets, and packages the result for reading, search, RAG, agent workflows, Obsidian-style archives, and future MCP integrations.
 
 ## Why It Exists
 
-Most content is trapped in noisy places: webpages full of navigation, PDFs with brittle text extraction, DOCX files with embedded assets, long recordings, video pages, forum threads, and app-like public pages. MarkdownEverything turns those inputs into a predictable archive format:
+Useful material often lives in awkward formats: webpages full of navigation, PDFs with brittle text extraction, DOCX files with embedded assets, long recordings, video pages, forum threads, and app-like public pages. MarkdownEverything normalizes those inputs into a small set of files:
 
 - frontmatter with source metadata
 - clean Markdown body
@@ -51,13 +55,13 @@ Most content is trapped in noisy places: webpages full of navigation, PDFs with 
 | Video files | Working | ffmpeg audio extraction, ASR timeline |
 | Public video links | Working | yt-dlp for accessible public media only; no DRM/login/paywall bypass |
 
-## Product Surface
+## Interface
 
-- Home page with URL input, file upload, text/HTML entry, and supported-type overview
-- Conversion task page with status, progress, errors, retry, and result navigation
-- Result page with Markdown preview, source info, copy, `.md` download, `.zip` download, delete, and retry
-- User history with type/status filters, search, delete, and redownload
-- Admin dashboard with users, jobs, failed logs, workers, storage, and health checks
+- Home page for URLs, file uploads, text, HTML, and supported input types
+- Task page with status, progress, errors, retry, and result links
+- Result page with Markdown preview, source details, copy, `.md` download, `.zip` download, delete, and retry
+- User history with type and status filters, search, delete, and redownload
+- Admin dashboard for users, jobs, failed logs, workers, storage, and health checks
 
 ## Architecture
 
@@ -79,7 +83,7 @@ flowchart LR
   WV --> S
 ```
 
-The Docker Compose stack includes:
+The Docker Compose setup runs:
 
 - `frontend`: Next.js App Router + TypeScript
 - `backend`: FastAPI + SQLAlchemy
@@ -100,7 +104,7 @@ Open:
 - App: <http://localhost>
 - API docs: <http://localhost/api/docs>
 
-The first registered user becomes an admin unless `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` are provided.
+The first registered user becomes an admin unless you set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
 
 For local development without Redis workers:
 
@@ -114,7 +118,7 @@ python -m uvicorn app.main:app --reload
 
 Text, HTML, CSV, PDF, DOCX, and most webpage conversions work without API keys.
 
-Audio/video transcription needs one ASR provider:
+Audio and video transcription needs one ASR provider:
 
 | Mode | Environment |
 | --- | --- |
@@ -133,9 +137,9 @@ If `AI_API_KEY` is not set, conversion still succeeds with an extractive fallbac
 
 ## Webpage Engine
 
-The web converter is built as a deterministic candidate-selection engine rather than a "longest text wins" scraper.
+The web converter uses deterministic candidate selection instead of a "longest text wins" scraper.
 
-It analyzes the page, generates candidates, scores each candidate with explainable metrics, and chooses the best output under safety and quality constraints.
+It analyzes the page, builds candidate outputs, scores them, and keeps the best result that passes safety and quality checks.
 
 Candidate sources include:
 
@@ -146,7 +150,7 @@ Candidate sources include:
 - heuristic DOM subtrees
 - rendered snapshots for home/search/list/SPAs
 
-Each conversion records metadata like:
+Each conversion records metadata such as:
 
 ```json
 {
@@ -163,7 +167,7 @@ See [docs/web-extractors.md](docs/web-extractors.md) for the extractor contract 
 
 ## Benchmarking
 
-The repository includes a 100+ site compatibility corpus:
+The repository includes a compatibility corpus with more than 100 sites:
 
 ```powershell
 cd backend
@@ -194,7 +198,7 @@ Base path: `/api`
 | `POST` | `/jobs/{id}/retry` | Retry a finished task |
 | `DELETE` | `/jobs/{id}` | Soft-delete a task and clean files |
 
-Guest tasks return a `guest_token`. Authenticated users get isolated history. Admins can inspect global system state from the admin dashboard.
+Guest tasks return a `guest_token`. Authenticated users get their own history. Admins can inspect system state from the admin dashboard.
 
 ## Storage Layout
 
@@ -218,7 +222,7 @@ Retention defaults:
 
 ## Security Boundary
 
-MarkdownEverything is designed for public and user-provided content conversion. It does not bypass access controls.
+MarkdownEverything handles public and user-provided content. It does not bypass access controls.
 
 Implemented safeguards include:
 
